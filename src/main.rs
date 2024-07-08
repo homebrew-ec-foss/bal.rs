@@ -94,11 +94,13 @@ async fn start_backend(addr: String) {
                 println!("Received on {}: {}", addr_clone, message);
             }
 
-            let response = format!( //200 OK
-                "HTTP/1.1 200 OK\r\n",
-                addr_clone,
+            
+            let response = format!(
+                //200 OK
+                "HTTP/1.1 200 OK\r\n\r\n{}",
                 extract_message(&request).unwrap_or_else(|| "No message found".to_string())
             );
+
             socket.write_all(response.as_bytes()).await.unwrap();
         });
     }
