@@ -1,0 +1,6 @@
+[workspace]
+members = [ "L7", 
+    "server",
+]
+
+workspace.resolver = "2"
