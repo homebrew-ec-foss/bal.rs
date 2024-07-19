@@ -17,7 +17,7 @@ impl round_robin {
 }
 
 impl LoadBalancer for round_robin {
-    fn get_server(&self) -> hyper::Uri {
+    fn get_server(&mut self) -> hyper::Uri {
         let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.backends.len();
         self.backends[index].clone()
     }

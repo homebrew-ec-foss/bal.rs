@@ -42,7 +42,7 @@ impl weighted_round_robin {
 }
 
 impl LoadBalancer for weighted_round_robin {
-    fn get_server(&self) -> hyper::Uri {
+    fn get_server(&mut self) -> hyper::Uri {
         loop {
             let current_index = self.current_index.load(Ordering::SeqCst);
             let new_index = (current_index + 1) % self.backends.len();

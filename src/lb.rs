@@ -3,7 +3,7 @@ use hyper::{Body, Client, Request, Response, Server, Uri};
 use hyper::http::StatusCode;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::str::FromStr;
 use std::error::Error;
 
@@ -13,7 +13,7 @@ use algos::weighted_round_robin::weighted_round_robin;
 //use algos::least_connections::least_connections;
 //use algos::weighted_least_connections::weighted_least_connections;
 //use algos::least_response_time::least_response_time;
-//use algos::weighted_least_response_time::weighted_least_response_time;
+// use algos::weighted_least_response_time::weighted_least_response_time;
 
 use crate::Config;
 
@@ -35,18 +35,18 @@ pub async fn start_lb(config: &Config) -> Result<(), Box<dyn Error>> {
     let addr = uri_to_socket_addr(&config.load_balancer)?;
 
     match config.algo { // im just using round robin for all now, will change once algos are done
-        crate::Algorithm::round_robin => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;},
-        crate::Algorithm::weighted_round_robin => {start_server(addr, Arc::new(weighted_round_robin::new(config.servers.clone(), config.weights.clone()))).await;},
-        crate::Algorithm::least_connections => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // least_connections::new(&config.servers),
-        crate::Algorithm::weighted_least_connections => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // weighted_least_connections::new(&config.servers, &config.weights),
-        crate::Algorithm::least_response_time => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // least_response_time::new(&config.servers, &config.weights),
-        crate::Algorithm::weighted_least_response_time => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // weighted_least_response_time::new(&config.servers, &config.weights),
+        crate::Algorithm::round_robin => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;},
+        crate::Algorithm::weighted_round_robin => {start_server(addr, Arc::new(Mutex::new(weighted_round_robin::new(config.servers.clone(), config.weights.clone())))).await;},
+        crate::Algorithm::least_connections => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;}, // least_connections::new(&config.servers),
+        crate::Algorithm::weighted_least_connections => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;}, // weighted_least_connections::new(&config.servers, &config.weights),
+        crate::Algorithm::least_response_time => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;}, // least_response_time::new(&config.servers, &config.weights),
+        crate::Algorithm::weighted_least_response_time => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;},
     };
 
     Ok(())
 }
 
-async fn start_server<T>(addr: SocketAddr, load_balancer: Arc<T>)
+async fn start_server<T>(addr: SocketAddr, load_balancer: Arc<Mutex<T>>)
 where
     T: LoadBalancer + Send + Sync + 'static,
 {
@@ -82,12 +82,12 @@ where
 
 async fn forward_request<T>(
     req: Request<Body>,
-    load_balancer: Arc<T>,
+    load_balancer: Arc<Mutex<T>>,
 ) -> Result<Response<Body>, hyper::Error>
 where
     T: LoadBalancer + Send + Sync + 'static,
-{
-    let uri: Uri = load_balancer.get_server();
+{   
+    let uri: Uri = load_balancer.lock().unwrap().get_server();
     let uri = format!("http://{}", uri);
     let uri: Uri = uri.parse().unwrap();
     let client = Client::new();
@@ -108,5 +108,5 @@ where
 }
 
 pub trait LoadBalancer {
-    fn get_server(&self) -> hyper::Uri;
+    fn get_server(&mut self) -> hyper::Uri;
 }
