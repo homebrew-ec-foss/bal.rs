@@ -8,10 +8,12 @@ use std::str::FromStr;
 use std::error::Error;
 
 mod algos;
-
-use algos::round_robin::RoundRobin;
-
-use algos::weighted_round_robin::WeightedRoundRobin;
+//use algos::round_robin::round_robin;
+//use algos::weighted_round_robin::weighted_round_robin;
+//use algos::round_robin::least_connections;
+//use algos::weighted_round_robin::weighted_least_connections;
+//use algos::round_robin::least_response_time;
+//use algos::weighted_round_robin::weighted_least_response_time;
 
 use crate::Config;
 
@@ -32,22 +34,13 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
 pub async fn start_lb(config: &Config) -> Result<(), Box<dyn Error>> {
     let addr = uri_to_socket_addr(&config.load_balancer)?;
 
-    let backend = &config.servers;
-
-    let mut backends = Vec::new();
-
-    for uri in backend {
-        backends.push(format!("http://{}", uri.to_string()));
-    }
-
-
     let mut backend = match config.algo {
-        crate::Algorithm::round_robin => RoundRobin::new(backends),
-        crate::Algorithm::weighted_round_robin => WeightedRoundRobin::new(backends), // need to change
-        crate::Algorithm::least_connections => (),
-        crate::Algorithm::weighted_least_connections => (),
-        crate::Algorithm::least_response_time => (),
-        crate::Algorithm::weighted_least_response_time => (),
+        crate::Algorithm::round_robin => (), // round_robin::new(&config.servers)
+        crate::Algorithm::weighted_round_robin => (), // weighted_round_robin::new(&config.servers, &config.weights)
+        crate::Algorithm::least_connections => (), // least_connections::new(&config.servers)
+        crate::Algorithm::weighted_least_connections => (), // weighted_least_connections::new(&config.servers, &config.weights)
+        crate::Algorithm::least_response_time => (), // least_response_time::new(&config.servers, &config.weights)
+        crate::Algorithm::weighted_least_response_time => (), // weighted_least_response_time::new(&config.servers, &config.weights)
     };
 
     start_server(addr, backend).await;
