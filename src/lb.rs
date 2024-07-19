@@ -9,7 +9,7 @@ use std::error::Error;
 
 mod algos;
 use algos::round_robin::round_robin;
-//use algos::weighted_round_robin::weighted_round_robin;
+use algos::weighted_round_robin::weighted_round_robin;
 //use algos::round_robin::least_connections;
 //use algos::weighted_round_robin::weighted_least_connections;
 //use algos::round_robin::least_response_time;
@@ -34,18 +34,14 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
 pub async fn start_lb(config: &Config) -> Result<(), Box<dyn Error>> {
     let addr = uri_to_socket_addr(&config.load_balancer)?;
 
-    let mut backend = match config.algo { // im just using round robin for all now, will change once algos are done
-        crate::Algorithm::round_robin => round_robin::new(config.servers.clone()),
-        crate::Algorithm::weighted_round_robin => round_robin::new(config.servers.clone()), // weighted_round_robin::new(&config.servers, &config.weights),
-        crate::Algorithm::least_connections => round_robin::new(config.servers.clone()), // least_connections::new(&config.servers),
-        crate::Algorithm::weighted_least_connections => round_robin::new(config.servers.clone()), // weighted_least_connections::new(&config.servers, &config.weights),
-        crate::Algorithm::least_response_time => round_robin::new(config.servers.clone()), // least_response_time::new(&config.servers, &config.weights),
-        crate::Algorithm::weighted_least_response_time => round_robin::new(config.servers.clone()), // weighted_least_response_time::new(&config.servers, &config.weights),
+    match config.algo { // im just using round robin for all now, will change once algos are done
+        crate::Algorithm::round_robin => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;},
+        crate::Algorithm::weighted_round_robin => {start_server(addr, Arc::new(weighted_round_robin::new(config.servers.clone(), config.weights.clone()))).await;},
+        crate::Algorithm::least_connections => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // least_connections::new(&config.servers),
+        crate::Algorithm::weighted_least_connections => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // weighted_least_connections::new(&config.servers, &config.weights),
+        crate::Algorithm::least_response_time => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // least_response_time::new(&config.servers, &config.weights),
+        crate::Algorithm::weighted_least_response_time => {start_server(addr, Arc::new(round_robin::new(config.servers.clone()))).await;}, // weighted_least_response_time::new(&config.servers, &config.weights),
     };
-
-    let backend = Arc::new(backend);
-
-    start_server(addr, backend).await;
 
     Ok(())
 }
