@@ -1,121 +1,157 @@
-use tokio::net::{TcpListener, TcpStream};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use std::sync::{Arc, Mutex};
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+use std::error::Error;
+use std::{env, process};
 
-#[tokio::main]
-async fn main() {
-    // Hardcoded ports for servers as of now
-    let backends = vec![
-        "127.0.0.1:8001".to_string(),
-        "127.0.0.1:8002".to_string(),
-        "127.0.0.1:8003".to_string(),
-    ];
+mod lb;
 
-    let backends = Arc::new(backends); //ref counting shared bw threads
-    let counter = Arc::new(Mutex::new(0));
-
-    // Start backend servers
-    for backend in backends.iter() {
-        let addr = backend.clone();
-        tokio::spawn(async move {
-            start_backend(addr).await;
-        });
-    }
-
-    let listener = TcpListener::bind("127.0.0.1:8000").await.unwrap();
-    println!("client on localhost:8000");
-
-    loop {
-        let (client, _) = listener.accept().await.unwrap();
-        println!("Connection established"); // Connection works
-
-        let backends = Arc::clone(&backends);
-        let counter = Arc::clone(&counter);
-
-        tokio::spawn(async move { // Acquire lock on counter and backends and spawn threads for clients
-            handle_client(client, backends, counter).await;
-        });
-    }
+#[derive(Debug)]
+struct Config {
+    load_balancer: hyper::Uri,
+    servers: Vec<hyper::Uri>,
+    weights: Vec<u32>,
+    algo: Algorithm,
 }
 
-async fn handle_client(mut client: TcpStream, backends: Arc<Vec<String>>, counter: Arc<Mutex<usize>>) {
-    // Round robin eziest 👍👍
-    let backend_addr = {
-        let mut counter = counter.lock().unwrap();
-        let backend_addr = backends[*counter].clone();
-        *counter = (*counter + 1) % backends.len();
-        backend_addr
-    };
+impl Config {
+    fn new() -> Self {
+        Config {
+            load_balancer: "127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer 
+            servers: Vec::new(),
+            weights: Vec::new(),
+            algo: Algorithm::round_robin, // using round robin as default algorithm
+        }
+    }
+    fn update(&mut self, path: &str) -> io::Result<&Config> {
+        let path = Path::new(path);
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
 
-    println!("Forwarding to: {}", backend_addr);
-
-    if let Ok(mut backend) = TcpStream::connect(&backend_addr).await {
-        let (mut client_reader, mut client_writer) = tokio::io::split(client);
-        let (mut backend_reader, mut backend_writer) = tokio::io::split(backend);
-
-        let client_to_backend = tokio::spawn(async move { // Copy data from client to backend
-            let mut buffer = [0; 1024];
-            while let Ok(n) = client_reader.read(&mut buffer).await {
-                if n == 0 {
-                    break;
+        for line in reader.lines() {
+            let line = line?;
+            if line.starts_with("load balancer:") {
+                let load_balancer = line.trim_start_matches("load balancer:").trim().parse::<hyper::Uri>();
+                let load_balancer = match load_balancer {
+                    Ok(load_balancer) => load_balancer,
+                    Err(_) => "127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer
+                };
+                self.load_balancer = load_balancer;
+            } else if line.starts_with("servers:") {
+                let servers = line.trim_start_matches("servers:").trim();
+                self.servers = servers
+                                    .split(",")
+                                    .map(|server| server
+                                        .trim()
+                                        .parse::<hyper::Uri>()
+                                        .expect("Invalid URI"))
+                                    .collect();
+            } else if line.starts_with("weights:") {
+                let weights = line.trim_start_matches("weights:").trim();
+                self.weights = weights
+                                    .split(",")
+                                    .map(|weight| weight
+                                        .trim()
+                                        .parse::<u32>()
+                                        .expect("Invalid weight"))
+                                    .collect();
+            } else if line.starts_with("algorithm:") {
+                let algo = line.trim_start_matches("algorithm:").trim();
+                self.algo = match algo {
+                    "round_robin" => Algorithm::round_robin,
+                    "weighted_round_robin" => Algorithm::weighted_round_robin,
+                    "least_connections" => Algorithm::least_connections,
+                    "weighted_least_connections" => Algorithm::weighted_least_connections,
+                    "least_response_time" => Algorithm::least_response_time,
+                    "weighted_least_response_time" => Algorithm::weighted_least_response_time,
+                    _ => Algorithm::round_robin, // Default algorithms
                 }
-                backend_writer.write_all(&buffer[..n]).await.ok();
             }
-        });
+        }
 
-        let backend_to_client = tokio::spawn(async move {
-            let mut buffer = [0; 1024];
-            while let Ok(n) = backend_reader.read(&mut buffer).await {
-                if n == 0 {
-                    break;
-                }
-                client_writer.write_all(&buffer[..n]).await.ok();
-            }
-        });
-
-        let _ = tokio::try_join!(client_to_backend, backend_to_client); // Wait for finish signal
+        Ok(self)
     }
 }
 
-async fn start_backend(addr: String) {
-    let listener = TcpListener::bind(&addr).await.unwrap();
-    println!("Backend server listening on {}", addr);
-
-    loop {
-        let (mut socket, _) = listener.accept().await.unwrap();
-        let addr_clone = addr.clone(); // clone to have two independent addr values 
-        tokio::spawn(async move {
-            let mut buffer = [0; 1024];
-            let n = socket.read(&mut buffer).await.unwrap();
-            let request = String::from_utf8_lossy(&buffer[..n]);
-            println!("Received request on {}", addr_clone); // Use the cloned addr value
-
-            if let Some(message) = extract_message(&request) {
-                println!("Received on {}: {}", addr_clone, message);
-            }
-
-            
-            let response = format!(
-                //200 OK
-                "HTTP/1.1 200 OK\r\n\r\n{}",
-                extract_message(&request).unwrap_or_else(|| "No message found".to_string())
-            );
-
-            socket.write_all(response.as_bytes()).await.unwrap();
-        });
-    }
+#[derive(Debug)]
+enum Algorithm {
+    round_robin,
+    weighted_round_robin,
+    least_connections,
+    weighted_least_connections,
+    least_response_time,
+    weighted_least_response_time,
 }
 
-fn extract_message(request: &str) -> Option<String> {
-    if request.contains("POST") {
-        let body_start = request.find("\r\n\r\n").unwrap_or(request.len()) + 4; //body start
-        let body = &request[body_start..];
-        let message_prefix = "message=";
-        body.split('&')
-            .find(|pair| pair.starts_with(message_prefix)) //wish there was strtok in rust fr
-            .map(|pair| pair[message_prefix.len()..].to_string())
+fn main() -> Result<(), Box<dyn Error>> {
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() > 1 {
+        run(args);
     } else {
-        None
+        println!(r#" ________  ___  ________  ________  ___  ___  ________      "#);
+        println!(r#"|\   ____\|\  \|\   __  \|\   ____\|\  \|\  \|\   ____\     "#);
+        println!(r#"\ \  \___|\ \  \ \  \|\  \ \  \___|\ \  \\\  \ \  \___|_    "#);
+        println!(r#" \ \  \    \ \  \ \   _  _\ \  \    \ \  \\\  \ \_____  \   "#);
+        println!(r#"  \ \  \____\ \  \ \  \\  \\ \  \____\ \  \\\  \|____|\  \  "#);
+        println!(r#"   \ \_______\ \__\ \__\\ _\\ \_______\ \_______\____\_\  \ "#);
+        println!(r#"    \|_______|\|__|\|__|\|__|\|_______|\|_______|\_________\"#);
+        println!("Type h or ? for a list of available commands");
+
+        let usn = whoami::username() + &String::from("@circus");
+
+        loop {
+            let mut arg = String::new();
+
+            print!("{usn}:> ");
+            io::stdout().flush().unwrap();
+            io::stdin().read_line(&mut arg).unwrap();
+
+            let mut args: Vec<String> = arg.trim().split_whitespace().map(String::from).collect();
+            args.insert(0, "Blank".to_string());
+
+            run(args);
+        }
+    }
+
+    Ok(())
+}
+
+fn run(args: Vec<String>) {
+    let mut config = Config::new();
+    let ref_config = config.update("src/.config").unwrap();
+
+    match args[1].as_str() {
+        "h" | "?" => help(),
+        "start" => lb::start_lb(ref_config).unwrap(),
+        //"stop" => lb::stop_lb(ref_config).unwrap(),
+        "p" => {
+            let p: u32 = match args[2].trim().parse() {
+                Ok(prt) => prt,
+                Err(_) => {
+                    println!("Error: Invalid argument passed as port number");
+                    process::exit(0); //Have to change to rerun instead of exiting
+                }
+            };
+            //lb::change_ports(p);
+        },
+        "c" => {
+            let s_count = ref_config.servers.len();
+            println!("{s_count} servers available");
+        },
+        "q" => {
+            println!("Exiting..");
+            process::exit(0);
+        },
+        _ => println!("Unknown argument passed")
     }
 }
-//error handling. cba to do rn
+
+fn help() {
+    println!("h or ? -> Displays this list of available commands");
+    println!("q -> Quit program. Applicable only when program is run with no arguments");
+    println!("start -> Starts the load balancer");
+    println!("stop -> Stops the load balancer");
+    println!("p <port_number> -> Changes to specified port. Takes one more argument as port number");
+    println!("c -> Shows number of available servers");
+}
