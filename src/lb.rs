@@ -8,7 +8,7 @@ use std::str::FromStr;
 use std::error::Error;
 
 mod algos;
-//use algos::round_robin::round_robin;
+use algos::round_robin::round_robin;
 //use algos::weighted_round_robin::weighted_round_robin;
 //use algos::round_robin::least_connections;
 //use algos::weighted_round_robin::weighted_least_connections;
@@ -34,14 +34,16 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
 pub async fn start_lb(config: &Config) -> Result<(), Box<dyn Error>> {
     let addr = uri_to_socket_addr(&config.load_balancer)?;
 
-    let mut backend = match config.algo {
-        crate::Algorithm::round_robin => (), // round_robin::new(&config.servers)
-        crate::Algorithm::weighted_round_robin => (), // weighted_round_robin::new(&config.servers, &config.weights)
-        crate::Algorithm::least_connections => (), // least_connections::new(&config.servers)
-        crate::Algorithm::weighted_least_connections => (), // weighted_least_connections::new(&config.servers, &config.weights)
-        crate::Algorithm::least_response_time => (), // least_response_time::new(&config.servers, &config.weights)
-        crate::Algorithm::weighted_least_response_time => (), // weighted_least_response_time::new(&config.servers, &config.weights)
+    let mut backend = match config.algo { // im just using round robin for all now, will change once algos are done
+        crate::Algorithm::round_robin => round_robin::new(config.servers.clone()),
+        crate::Algorithm::weighted_round_robin => round_robin::new(config.servers.clone()), // weighted_round_robin::new(&config.servers, &config.weights),
+        crate::Algorithm::least_connections => round_robin::new(config.servers.clone()), // least_connections::new(&config.servers),
+        crate::Algorithm::weighted_least_connections => round_robin::new(config.servers.clone()), // weighted_least_connections::new(&config.servers, &config.weights),
+        crate::Algorithm::least_response_time => round_robin::new(config.servers.clone()), // least_response_time::new(&config.servers, &config.weights),
+        crate::Algorithm::weighted_least_response_time => round_robin::new(config.servers.clone()), // weighted_least_response_time::new(&config.servers, &config.weights),
     };
+
+    let backend = Arc::new(backend);
 
     start_server(addr, backend).await;
 
@@ -89,12 +91,12 @@ async fn forward_request<T>(
 where
     T: LoadBalancer + Send + Sync + 'static,
 {
-    let backend = load_balancer.get_server();
+    let uri: Uri = load_balancer.get_server();
 
     let client = Client::new();
 
-    let uri_string = format!("{}{}", backend, req.uri().path_and_query().map(|x| x.as_str()).unwrap_or(""));
-    let uri: Uri = uri_string.parse().unwrap();
+    // let uri_string = format!("{}{}", backend, req.uri().path_and_query().map(|x| x.as_str()).unwrap_or(""));
+    // let uri: Uri = uri_string.parse().unwrap();
 
     let mut new_req_builder = Request::builder()
         .method(req.method())
@@ -112,5 +114,5 @@ where
 }
 
 pub trait LoadBalancer {
-    fn get_server(&self) -> String;
+    fn get_server(&self) -> hyper::Uri;
 }

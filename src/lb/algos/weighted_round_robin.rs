@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::lb::LoadBalancer;
 
 pub struct WeightedRoundRobin {
-    backends: Arc<Vec<(String, f64)>>,
+    backends: Arc<Vec<(hyper::Uri, f64)>>,
     weights: Arc<Vec<f64>>,
     current_index: AtomicUsize,
     current_weight: AtomicUsize,
@@ -12,7 +12,7 @@ pub struct WeightedRoundRobin {
 }
 
 impl WeightedRoundRobin {
-    pub fn new(backends: Vec<(String, f64)>) -> Self {
+    pub fn new(backends: Vec<(hyper::Uri, f64)>) -> Self {
         let weights: Vec<f64> = backends.iter().map(|&(_, weight)| weight).collect();
         let max_weight = (weights.iter().cloned().fold(0./0., f64::max) * 100.0) as usize;
         let gcd_weight = Self::calculate_gcd(&weights);
@@ -40,7 +40,7 @@ impl WeightedRoundRobin {
 }
 
 impl LoadBalancer for WeightedRoundRobin {
-    fn get_server(&self) -> String {
+    fn get_server(&self) -> hyper::Uri {
         loop {
             let current_index = self.current_index.load(Ordering::SeqCst);
             let new_index = (current_index + 1) % self.backends.len();
