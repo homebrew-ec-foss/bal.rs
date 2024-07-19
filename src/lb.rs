@@ -92,11 +92,9 @@ where
     T: LoadBalancer + Send + Sync + 'static,
 {
     let uri: Uri = load_balancer.get_server();
-
+    let uri = format!("http://{}", uri);
+    let uri: Uri = uri.parse().unwrap();
     let client = Client::new();
-
-    // let uri_string = format!("{}{}", backend, req.uri().path_and_query().map(|x| x.as_str()).unwrap_or(""));
-    // let uri: Uri = uri_string.parse().unwrap();
 
     let mut new_req_builder = Request::builder()
         .method(req.method())
