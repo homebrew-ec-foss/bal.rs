@@ -3,8 +3,11 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::error::Error;
 
+mod lb;
+
 #[derive(Debug)]
 struct Config {
+    load_balancer: hyper::Uri,
     servers: Vec<hyper::Uri>,
     weights: Vec<u32>,
     algo: Algorithm,
@@ -13,6 +16,7 @@ struct Config {
 impl Config {
     fn new() -> Self {
         Config {
+            load_balancer: "127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer 
             servers: Vec::new(),
             weights: Vec::new(),
             algo: Algorithm::round_robin, // using round robin as default algorithm
@@ -25,7 +29,14 @@ impl Config {
 
         for line in reader.lines() {
             let line = line?;
-            if line.starts_with("servers:") {
+            if line.starts_with("load balancer:") {
+                let load_balancer = line.trim_start_matches("load balancer:").trim().parse::<hyper::Uri>();
+                let load_balancer = match load_balancer {
+                    Ok(load_balancer) => load_balancer,
+                    Err(_) => "127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer
+                };
+                self.load_balancer = load_balancer;
+            } else if line.starts_with("servers:") {
                 let servers = line.trim_start_matches("servers:").trim();
                 self.servers = servers
                                     .split(",")
@@ -78,6 +89,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     println!("{:?}", ref_config); // remove
 
     // cli
+
+    lb::start_lb(ref_config);
 
     Ok(())
 }
