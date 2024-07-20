@@ -1,73 +1,37 @@
-use hyper::{client, Body, Client, Request, Response, Uri};
-use hyper::client::HttpConnector;
-use std::sync::{Arc, Mutex};
-use tokio::time::{timeout, sleep, Duration};
+use hyper::Uri;
+use tokio::time::Duration;
 use crate::lb::LoadBalancer;
 
 pub struct weighted_least_response_time {
-    servers: Arc<Mutex<Vec<server>>>,
+    pub backends: Vec<Uri>,
+    pub weights: Vec<u32>,
+    pub response_times: Vec<Duration>,
 }
 
 impl weighted_least_response_time {
     pub fn new(backends: Vec<hyper::Uri>, weights: Vec<u32>) -> Self {
         weighted_least_response_time {
-            servers: Arc::new(Mutex::new(backends
-                                .into_iter()
-                                .zip(weights.iter())
-                                .map(|(backend, weight)| server::new(backend, weight))
-                                .collect())),
+            response_times: vec![Duration::from_secs(0); backends.len()],
+            backends: backends,
+            weights: weights,
         }
     }
-    async fn update_response_time(&mut self) {
-        println!("In");
-        for server in self.servers.lock().unwrap().iter_mut() {
-            println!("before: {} {}  ...", server.uri, server.response_time.as_millis());
-            server.update_response_time();
-            println!("after: {} {}  ...", server.uri, server.response_time.as_millis());
-        }
+    pub fn update(&mut self, response_times: Vec<Duration>) {
+        self.response_times = response_times;
     }
 }
 
 impl LoadBalancer for weighted_least_response_time {
     fn get_server(&mut self) -> Uri {
-        // self.update_response_time().await;
-        self.servers.lock().unwrap().iter()
-            .map(|server| {
-                let weighted_time = (server.response_time.as_millis() as f64) / (server.weight as f64);
-                println!("{} {} {}", server.uri, weighted_time, server.response_time.as_millis());
-                (server.uri.clone(), weighted_time)
-            })
-            .min_by(|(_, t1), (_, t2)| t1.partial_cmp(t2).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(uri, _)| uri)
-            .unwrap_or_else(|| self.servers.lock().unwrap().get(0).unwrap().uri.clone())
-    }
-}
+        let min_index = self.response_times.iter()
+                            .zip(self.weights.iter())
+                            .enumerate()
+                            .min_by_key(|(_, (response_time, weight))| { // (index, (duration, weight))
+                                let response_time_ms = response_time.as_millis() as u32;
+                                response_time_ms / *weight // calculates weighted response time
+                            })
+                            .unwrap_or((0, (&self.response_times[0], &0))); // Default to index 0 if no servers are available
 
-struct server {
-    uri: hyper::Uri,
-    weight: u32,
-    response_time: Duration,
-}
-
-impl server {
-    fn new(uri: hyper::Uri, weight: &u32) -> Self {
-        server {
-            uri: uri,
-            weight: *weight,
-            response_time: Duration::from_secs(0),
-        }
-    }
-    async fn update_response_time(&mut self) -> &Self {
-        let client = Client::new();
-        let start = std::time::Instant::now();
-
-        self.response_time = match timeout(Duration::from_secs(2), client.get(self.uri.clone())).await {
-            Ok(Ok(_)) => start.elapsed(),
-            _ => Duration::from_secs(u64::MAX),
-        };
-
-        println!("{}", self.response_time.as_millis());
-
-        self
+        self.backends.get(min_index.0).unwrap().clone()
     }
 }

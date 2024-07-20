@@ -2,6 +2,7 @@ use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::error::Error;
+use std::sync::Arc;
 
 mod lb;
 
@@ -90,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // cli
 
-    lb::start_lb(ref_config);
+    lb::start_lb(Arc::new(config));
 
     Ok(())
 }

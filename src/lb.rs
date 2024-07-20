@@ -6,13 +6,14 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::str::FromStr;
 use std::error::Error;
+use tokio::time::{sleep, Duration, timeout};
 
 mod algos;
 use algos::round_robin::round_robin;
 use algos::weighted_round_robin::weighted_round_robin;
 //use algos::least_connections::least_connections;
 //use algos::weighted_least_connections::weighted_least_connections;
-//use algos::least_response_time::least_response_time;
+use algos::least_response_time::least_response_time;
 use algos::weighted_least_response_time::weighted_least_response_time;
 
 use crate::Config;
@@ -31,18 +32,94 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
 }
 
 #[tokio::main]
-pub async fn start_lb(config: &Config) -> Result<(), Box<dyn Error>> {
+pub async fn start_lb(config: Arc<Config>) -> Result<(), Box<dyn Error>> {
     let addr = uri_to_socket_addr(&config.load_balancer)?;
 
     match config.algo { // im just using round robin for all now, will change once algos are done
-        crate::Algorithm::round_robin => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;},
-        crate::Algorithm::weighted_round_robin => {start_server(addr, Arc::new(Mutex::new(weighted_round_robin::new(config.servers.clone(), config.weights.clone())))).await;},
-        crate::Algorithm::least_connections => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;}, // least_connections::new(&config.servers),
-        crate::Algorithm::weighted_least_connections => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;}, // weighted_least_connections::new(&config.servers, &config.weights),
-        crate::Algorithm::least_response_time => {start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;}, // least_response_time::new(&config.servers, &config.weights),
-        crate::Algorithm::weighted_least_response_time => {start_server(addr, Arc::new(Mutex::new(weighted_least_response_time::new(config.servers.clone(), config.weights.clone())))).await;},
-    };
+        crate::Algorithm::round_robin => {
+            start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await;
+        },
+        crate::Algorithm::weighted_round_robin => {
+            start_server(addr, Arc::new(Mutex::new(weighted_round_robin::new(config.servers.clone(), config.weights.clone())))).await;
+        },
+        crate::Algorithm::least_connections => {
+            start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await; // least_connections::new(&config.servers),
+        }, 
+        crate::Algorithm::weighted_least_connections => {
+            start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await; // weighted_least_connections::new(&config.servers, &config.weights),
+        },
+        crate::Algorithm::least_response_time => {
+            let load_balancer = Arc::new(Mutex::new(least_response_time::new(config.servers.clone())));
 
+            let load_balancer_clone = Arc::clone(&load_balancer);
+            let config_clone = Arc::clone(&config);
+
+            tokio::spawn(async move { // loop to update response time
+                loop {
+                    let mut response_times = vec![];
+                    let client = Client::new();
+                    
+                    for server in &config_clone.servers {
+                        let start = std::time::Instant::now();
+
+                        let response_time = match timeout(Duration::from_secs(1), client.get(format!("http://{}", server.clone()).parse::<Uri>().unwrap())).await {
+                            Ok(Ok(_)) => start.elapsed(),
+                            err => {
+                                eprintln!("{:?}", err);
+                                Duration::from_secs(u64::MAX)
+                            }
+                        };
+
+                        response_times.push(response_time);
+                    }
+                    
+                    {
+                        let mut load_balancer_clone = load_balancer_clone.lock().unwrap();
+                        load_balancer_clone.update(response_times);
+                    }
+                    sleep(Duration::from_secs(30)).await; // updates response time every 30 seconds
+                }
+            });
+
+            start_server(addr, load_balancer).await;
+        },
+        crate::Algorithm::weighted_least_response_time => {
+            let load_balancer = Arc::new(Mutex::new(weighted_least_response_time::new(config.servers.clone(), config.weights.clone())));
+
+            let load_balancer_clone = Arc::clone(&load_balancer);
+            let config_clone = Arc::clone(&config);
+
+            tokio::spawn(async move { // loop to update response time
+                loop {
+                    let mut response_times = vec![];
+                    let client = Client::new();
+                    
+                    for server in &config_clone.servers {
+                        let start = std::time::Instant::now();
+
+                        let response_time = match timeout(Duration::from_secs(1), client.get(format!("http://{}", server.clone()).parse::<Uri>().unwrap())).await {
+                            Ok(Ok(_)) => start.elapsed(),
+                            err => {
+                                eprintln!("{:?}", err);
+                                Duration::from_secs(u64::MAX)
+                            }
+                        };
+
+                        response_times.push(response_time);
+                    }
+                    
+                    {
+                        let mut load_balancer_clone = load_balancer_clone.lock().unwrap();
+                        load_balancer_clone.update(response_times);
+                    }
+                    sleep(Duration::from_secs(30)).await; // updates response time every 30 seconds
+                }
+            });
+
+            start_server(addr, load_balancer).await;
+        },
+    };
+    
     Ok(())
 }
 
@@ -87,9 +164,10 @@ async fn forward_request<T>(
 where
     T: LoadBalancer + Send + Sync + 'static,
 {   
-    let uri: Uri = load_balancer.lock().unwrap().get_server();
+    let uri = load_balancer.lock().unwrap().get_server();
     let uri = format!("http://{}", uri);
     let uri: Uri = uri.parse().unwrap();
+    println!("{:?}", uri);
     let client = Client::new();
 
     let mut new_req_builder = Request::builder()
@@ -107,6 +185,6 @@ where
     client.request(new_req).await
 }
 
-pub trait LoadBalancer {
+pub trait LoadBalancer: Send + Sync {
     fn get_server(&mut self) -> hyper::Uri;
 }
