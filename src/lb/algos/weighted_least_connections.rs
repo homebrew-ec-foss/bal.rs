@@ -1,49 +1,69 @@
-use hyper::{Server, Uri};
+use hyper::Uri;
+use std::sync::{Arc, Mutex, atomic::{AtomicUsize, Ordering}};
+// use tokio::sync::;
 use crate::lb::LoadBalancer;
 
-pub struct WeightedLeastConnections {
-    servers: Vec<server>,
+pub struct weighted_least_connections {
+    servers: Arc<Mutex<Vec<Server>>>,
 }
 
-pub struct server {
-    uri: hyper::Uri,
-    pub connections: u32,
-    max_connections: u32,
-    weight: u32,
-}
-
-impl WeightedLeastConnections {
-    pub fn new(backends: Vec<Uri>, weights: Vec<u32>, max_connections: Vec<u32>) -> Self {
-        WeightedLeastConnections {
-            servers: backends.iter()
-                .enumerate()
-                .map(|(index, uri)| server {
-                    uri: uri.clone(),
-                    connections: 0,
-                    max_connections: max_connections.get(index).unwrap().clone(),
-                    weight: weights.get(index).unwrap().clone(),
-
-                })
-                .collect()
+impl weighted_least_connections {
+    pub fn new(backends: Vec<Uri>, weights: Vec<u32>) -> Self {
+        weighted_least_connections {
+            servers: Arc::new(Mutex::new(
+                backends.into_iter()
+                    .zip(weights.into_iter())
+                    .map(|(backend, weight)| Server::new(backend, weight))
+                    .collect::<Vec<Server>>()
+            )),
         }
+    }
+
+    pub fn add_backend(&self, backend: Uri, weight: u32) {
+        let mut servers = self.servers.lock().unwrap();
+        servers.push(Server::new(backend, weight));
+    }
+
+    pub fn remove_backend(&self, backend: &Uri) {
+        let mut servers = self.servers.lock().unwrap();
+        servers.retain(|server| &server.uri != backend);
     }
 }
 
-impl LoadBalancer for WeightedLeastConnections {
+impl LoadBalancer for weighted_least_connections {
     fn get_server(&mut self) -> Uri {
-        let min_index = self.servers.iter()
-            .enumerate()
-            .map(|(index, server)| {
-                let weighted_score = server.connections / server.weight;
-                (index, weighted_score)
+        let servers = self.servers.lock().unwrap();
+        servers.iter()
+            .map(|server| {
+                let weighted_connections = server.active_connections.load(Ordering::SeqCst) as f64 / server.weight as f64;
+                (server.uri.clone(), weighted_connections)
             })
-            .min_by_key(|(_, score)| *score)
-            .unwrap_or((0, u32::MAX)); // Default to index 0 if no servers are available
+            .min_by(|(_, c1), (_, c2)| c1.partial_cmp(c2).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(uri, _)| uri)
+            .unwrap_or_else(|| servers.first().unwrap().uri.clone())
+    }
+}
 
-        // Increment the connection count of the selected server
-        let selected_server = &mut self.servers[min_index.0];
-        selected_server.connections += 1;
+struct Server {
+    uri: Uri,
+    weight: u32,
+    active_connections: Arc<AtomicUsize>,
+}
 
-        selected_server.uri.clone()
+impl Server {
+    fn new(uri: Uri, weight: u32) -> Self {
+        Server {
+            uri,
+            weight,
+            active_connections: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn increment_connections(&self) {
+        self.active_connections.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn decrement_connections(&self) {
+        self.active_connections.fetch_sub(1, Ordering::SeqCst);
     }
 }

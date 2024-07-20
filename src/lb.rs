@@ -12,7 +12,7 @@ mod algos;
 use algos::round_robin::round_robin;
 use algos::weighted_round_robin::weighted_round_robin;
 //use algos::least_connections::least_connections;
-use algos::weighted_least_connections::WeightedLeastConnections;
+use algos::weighted_least_connections::weighted_least_connections;
 use algos::least_response_time::least_response_time;
 use algos::weighted_least_response_time::weighted_least_response_time;
 
@@ -46,7 +46,7 @@ pub async fn start_lb(config: Arc<Config>) -> Result<(), Box<dyn Error>> {
             start_server(addr, Arc::new(Mutex::new(round_robin::new(config.servers.clone())))).await; // least_connections::new(&config.servers),
         }, 
         crate::Algorithm::weighted_least_connections => {
-            start_server(addr, Arc::new(Mutex::new(WeightedLeastConnections::new(config.servers.clone(), config.weights.clone(), vec![100; config.weights.len()])))).await; // weighted_least_connections::new(&config.servers, &config.weights),
+            start_server(addr, Arc::new(Mutex::new(weighted_least_connections::new(config.servers.clone(), config.weights.clone())))).await; // weighted_least_connections::new(&config.servers, &config.weights),
         },
         crate::Algorithm::least_response_time => {
             let load_balancer = Arc::new(Mutex::new(least_response_time::new(config.servers.clone())));
