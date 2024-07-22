@@ -1,0 +1,7 @@
+[workspace]
+members = [ "l7_load_balancer",
+    "server",
+    "l7_load_balancer",
+]
+
+workspace.resolver = "2"
