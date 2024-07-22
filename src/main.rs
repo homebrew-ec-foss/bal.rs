@@ -1,7 +1,9 @@
-use std::fs::File;
-use std::io::{self, BufRead, BufReader};
-use std::path::Path;
 use std::error::Error;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Write};
+use std::path::Path;
+use std::sync::Arc;
+use std::{env, process};
 
 mod lb;
 
@@ -16,7 +18,7 @@ struct Config {
 impl Config {
     fn new() -> Self {
         Config {
-            load_balancer: "127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer 
+            load_balancer: "127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer
             servers: Vec::new(),
             weights: Vec::new(),
             algo: Algorithm::round_robin, // using round robin as default algorithm
@@ -30,7 +32,10 @@ impl Config {
         for line in reader.lines() {
             let line = line?;
             if line.starts_with("load balancer:") {
-                let load_balancer = line.trim_start_matches("load balancer:").trim().parse::<hyper::Uri>();
+                let load_balancer = line
+                    .trim_start_matches("load balancer:")
+                    .trim()
+                    .parse::<hyper::Uri>();
                 let load_balancer = match load_balancer {
                     Ok(load_balancer) => load_balancer,
                     Err(_) => "127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer
@@ -39,21 +44,15 @@ impl Config {
             } else if line.starts_with("servers:") {
                 let servers = line.trim_start_matches("servers:").trim();
                 self.servers = servers
-                                    .split(",")
-                                    .map(|server| server
-                                        .trim()
-                                        .parse::<hyper::Uri>()
-                                        .expect("Invalid URI"))
-                                    .collect();
+                    .split(",")
+                    .map(|server| server.trim().parse::<hyper::Uri>().expect("Invalid URI"))
+                    .collect();
             } else if line.starts_with("weights:") {
                 let weights = line.trim_start_matches("weights:").trim();
                 self.weights = weights
-                                    .split(",")
-                                    .map(|weight| weight
-                                        .trim()
-                                        .parse::<u32>()
-                                        .expect("Invalid weight"))
-                                    .collect();
+                    .split(",")
+                    .map(|weight| weight.trim().parse::<u32>().expect("Invalid weight"))
+                    .collect();
             } else if line.starts_with("algorithm:") {
                 let algo = line.trim_start_matches("algorithm:").trim();
                 self.algo = match algo {
@@ -84,13 +83,86 @@ enum Algorithm {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut config = Config::new();
-    let ref_config = config.update("src/.config")?;
+    config.update("src/.config")?;
+    let mut config = Arc::new(config);
 
-    println!("{:?}", ref_config); // remove
+    let args: Vec<String> = env::args().collect();
 
-    // cli
+    if args.len() > 1 {
+        run(args, &config);
+    } else {
+        println!(r#" ________  ___  ________  ________  ___  ___  ________      "#);
+        println!(r#"|\   ____\|\  \|\   __  \|\   ____\|\  \|\  \|\   ____\     "#);
+        println!(r#"\ \  \___|\ \  \ \  \|\  \ \  \___|\ \  \\\  \ \  \___|_    "#);
+        println!(r#" \ \  \    \ \  \ \   _  _\ \  \    \ \  \\\  \ \_____  \   "#);
+        println!(r#"  \ \  \____\ \  \ \  \\  \\ \  \____\ \  \\\  \|____|\  \  "#);
+        println!(r#"   \ \_______\ \__\ \__\\ _\\ \_______\ \_______\____\_\  \ "#);
+        println!(r#"    \|_______|\|__|\|__|\|__|\|_______|\|_______|\_________\"#);
+        println!("Type h or ? for a list of available commands");
 
-    lb::start_lb(ref_config);
+        let usn = whoami::username() + &String::from("@circus");
+
+        let mut cli_completed = false;
+        while !cli_completed {
+            let config_clone = Arc::clone(&config);
+            let mut arg = String::new();
+
+            print!("{usn}:> ");
+            io::stdout().flush().unwrap();
+            io::stdin().read_line(&mut arg).unwrap();
+
+            let mut args: Vec<String> = arg.trim().split_whitespace().map(String::from).collect();
+            args.insert(0, "Blank".to_string());
+
+            cli_completed = run(args, &config_clone);
+        }
+
+        drop(lb::start_lb(config));
+    }
 
     Ok(())
+}
+
+fn run(args: Vec<String>, ref_config: &Config) -> bool {
+    match args[1].as_str() {
+        "h" | "?" => {
+            help();
+            false
+        }
+        "start" => true,
+        //"stop" => lb::stop_lb(ref_config).unwrap(),
+        "p" => {
+            let p: u32 = match args[2].trim().parse() {
+                Ok(prt) => prt,
+                Err(_) => {
+                    println!("Error: Invalid argument passed as port number");
+                    return false;
+                }
+            };
+            false
+            //lb::change_ports(p);
+        }
+        "c" => {
+            let s_count = ref_config.servers.len();
+            println!("{s_count} servers available");
+            false
+        }
+        "q" => {
+            println!("Exiting..");
+            process::exit(0);
+        }
+        _ => {
+            println!("Unknown argument passed");
+            false
+        }
+    }
+}
+
+fn help() {
+    println!("h or ? -> Displays this list of available commands");
+    println!("q -> Quit program. Applicable only when program is run with no arguments");
+    println!("start -> Starts the load balancer");
+    // println!("stop -> Stops the load balancer");
+    println!("p -> Update servers");
+    println!("c -> Shows number of available servers");
 }

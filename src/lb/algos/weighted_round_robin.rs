@@ -2,23 +2,25 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use crate::lb::LoadBalancer;
 
-pub struct WeightedRoundRobin {
-    backends: Arc<Vec<(hyper::Uri, f64)>>,
-    weights: Arc<Vec<f64>>,
+pub struct weighted_round_robin {
+    backends: Arc<Vec<(hyper::Uri, u32)>>,
+    weights: Arc<Vec<u32>>,
     current_index: AtomicUsize,
     current_weight: AtomicUsize,
     max_weight: usize,
     gcd_weight: usize,
 }
 
-impl WeightedRoundRobin {
-    pub fn new(backends: Vec<(hyper::Uri, f64)>) -> Self {
-        let weights: Vec<f64> = backends.iter().map(|&(_, weight)| weight).collect();
-        let max_weight = (weights.iter().cloned().fold(0./0., f64::max) * 100.0) as usize;
+impl weighted_round_robin {
+    pub fn new(backends: Vec<(hyper::Uri)>, weights: Vec<u32>) -> Self {
+        let max_weight = (weights.iter().cloned().fold(0, u32::max) * 100) as usize;
         let gcd_weight = Self::calculate_gcd(&weights);
 
-        WeightedRoundRobin {
-            backends: Arc::new(backends),
+        weighted_round_robin {
+            backends: Arc::new(backends.into_iter()
+                                .zip(weights.iter())
+                                .map(|(backend, &weight)| (backend, weight))
+                                .collect()),
             weights: Arc::new(weights),
             current_index: AtomicUsize::new(0),
             current_weight: AtomicUsize::new(max_weight),
@@ -27,10 +29,10 @@ impl WeightedRoundRobin {
         }
     }
 
-    fn calculate_gcd(weights: &Vec<f64>) -> usize {
+    fn calculate_gcd(weights: &Vec<u32>) -> usize {
         weights
             .iter()
-            .map(|&weight| (weight * 100.0).round() as usize)
+            .map(|&weight| (weight * 100) as usize)
             .fold(0, |acc, x| Self::gcd(acc, x))
     }
 
@@ -39,8 +41,8 @@ impl WeightedRoundRobin {
     }
 }
 
-impl LoadBalancer for WeightedRoundRobin {
-    fn get_server(&self) -> hyper::Uri {
+impl LoadBalancer for weighted_round_robin {
+    fn get_server(&mut self) -> hyper::Uri {
         loop {
             let current_index = self.current_index.load(Ordering::SeqCst);
             let new_index = (current_index + 1) % self.backends.len();
@@ -56,7 +58,7 @@ impl LoadBalancer for WeightedRoundRobin {
                 }
             }
 
-            let weight = (self.weights[new_index] * 100.0).round() as usize;
+            let weight = (self.weights[new_index] * 100) as usize;
             if self.current_weight.load(Ordering::SeqCst) <= weight {
                 return self.backends[new_index].0.clone();
             }
