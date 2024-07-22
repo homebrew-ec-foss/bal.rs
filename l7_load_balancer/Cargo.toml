@@ -1,0 +1,13 @@
+[package]
+name = "l7_load_balancer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+server = { path = "../server" }
+csv = "1.1"
+
+hyper = { version = "1.4", features = ["full"] }
+tokio = { version = "1", features = ["full"] }
+http-body-util = "0.1"
+hyper-util = { version = "0.1", features = ["full"] }
