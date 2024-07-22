@@ -15,7 +15,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-async fn handle_request(_: Request<hyper::body::Incoming>, ports_clone: Arc<Mutex<Vec<u16>>>) -> Result<Response<Full<Bytes>>, Infallible> {
+async fn handle_request(req: Request<hyper::body::Incoming>, ports_clone: Arc<Mutex<Vec<u16>>>) -> Result<Response<Full<Bytes>>, Infallible> {
     let port = match ports_clone.lock() {
         Ok(mut guard) => {
             round_robin::get_next_backend_port(&mut guard)
@@ -27,7 +27,7 @@ async fn handle_request(_: Request<hyper::body::Incoming>, ports_clone: Arc<Mute
         }
     };
     println!("request forwarded to port {}", port);
-    let data = send_request(port).await;
+    let data = send_request(port, req.uri().to_string()).await;
     match data {
         Ok(data) => {
             Ok(Response::new(Full::new(data)))
@@ -45,9 +45,9 @@ async fn handle_request(_: Request<hyper::body::Incoming>, ports_clone: Arc<Mute
     }
 }
 
-async fn send_request(port: u16) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
+async fn send_request(port: u16, uri: String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
     // Parse our URL...
-    let url = format!("http://127.0.0.1:{}", port).parse::<hyper::Uri>()?; //change 3000 after making round robin part
+    let url = format!("http://127.0.0.1:{}{}", port, uri).parse::<hyper::Uri>()?; //change 3000 after making round robin part
 
     // Get the host and the port
     let host = url.host().expect("uri has no host");

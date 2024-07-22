@@ -1,5 +1,5 @@
 [workspace]
-members = [ "l7_load_balancer",
+members = [
     "server",
     "l7_load_balancer",
 ]
