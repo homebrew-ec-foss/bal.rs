@@ -63,7 +63,10 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     Ok(())
 }
 
-async fn handle_request(req: Request<hyper::body::Incoming>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<RoundRobin>>) -> Result<Response<Full<Bytes>>, Infallible> {
+async fn handle_request<T>(req: Request<hyper::body::Incoming>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Result<Response<Full<Bytes>>, Infallible> 
+where
+    T: LoadBalancer,
+{
     let addr = load_balancer.lock().unwrap().get_server();
     println!("request forwarded to server {}", addr);
     let request = format!("{}{}", addr, req.uri());
