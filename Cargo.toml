@@ -1,7 +1,0 @@
-[workspace]
-members = [
-    "server",
-    "l7_load_balancer",
-]
-
-workspace.resolver = "2"
