@@ -78,8 +78,8 @@ impl Config {
                 self.response_time = vec![Duration::from_secs(0); self.servers.len()];
                 self.connections = vec![0; self.servers.len()];
                 
-            } else if line.starts_with("max connections") {
-                let max_connections = line.trim_start_matches("max connections").trim();
+            } else if line.starts_with("max connections:") {
+                let max_connections = line.trim_start_matches("max connections:").trim();
                 self.max_connections = max_connections
                                         .split(",")
                                         .map(|max_connection| max_connection
@@ -87,14 +87,13 @@ impl Config {
                                                 .parse::<u32>()
                                                 .expect("Invalid max connection"))
                                         .collect();
-                self.connections = vec![0; self.servers.len()];
                 
-            } else if line.starts_with("timeout") {
-                let timeout = line.trim_start_matches("timeout").trim();
+            } else if line.starts_with("timeout:") {
+                let timeout = line.trim_start_matches("timeout:").trim();
                 self.timeout = Duration::from_millis(timeout.parse::<u64>().expect("Invalid timeout"));
                 
-            } else if line.starts_with("max retries") {
-                let max_retries = line.trim_start_matches("max retries").trim();
+            } else if line.starts_with("max retries:") {
+                let max_retries = line.trim_start_matches("max retries:").trim();
                 self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
             }
         }
