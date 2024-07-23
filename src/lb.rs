@@ -217,9 +217,13 @@ where
     println!("request forwarded to server {}", addr);
 
     let request = match &*req {
-        Some(req) => format!("{}{}", addr, req.uri()),
+        Some(req) => {
+            println!("{:?}", req);
+            format!("{}{}", addr, req.uri().to_string().trim_start_matches("/"))
+        },
         None => addr.to_string(),
     };
+    println!("{:?}", request);
 
     let start = Instant::now();
     config.lock().unwrap().connections[index] += 1;

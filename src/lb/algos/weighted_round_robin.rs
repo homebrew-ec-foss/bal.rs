@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 use crate::lb::{servers_alive, LoadBalancer};
 use crate::Config;
 
@@ -17,17 +17,20 @@ impl WeightedRoundRobin {
             current_weight: Mutex::new(0),
         }
     }
+
+    fn safe_lock<T>(mutex: &Mutex<T>) -> Option<MutexGuard<T>> {
+        mutex.lock().ok()
+    }
 }
 
 impl LoadBalancer for WeightedRoundRobin {
     fn get_server(&self) -> Option<u32> {
-        let config = self.config.lock().unwrap();
-
+        let config = WeightedRoundRobin::safe_lock(&self.config)?;
         while servers_alive(&config.alive) {
             let index = self.current_index.fetch_add(1, Ordering::SeqCst) % config.servers.len();
 
-            let mut weight = self.current_weight.lock().unwrap();
-            if *weight >= config.weights[index].try_into().unwrap() {
+            let mut weight = WeightedRoundRobin::safe_lock(&self.current_weight)?;
+            if *weight >= config.weights[index] as usize {
                 *weight = 0;
                 continue;
             }
