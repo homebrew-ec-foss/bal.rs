@@ -93,7 +93,7 @@ impl Config {
                 
             } else if line.starts_with("timeout:") {
                 let timeout = line.trim_start_matches("timeout:").trim();
-                self.timeout = Duration::from_millis(timeout.parse::<u64>().expect("Invalid timeout"));
+                self.timeout = Duration::from_secs(timeout.parse::<u64>().expect("Invalid timeout"));
                 
             } else if line.starts_with("max retries:") {
                 let max_retries = line.trim_start_matches("max retries:").trim();
@@ -101,7 +101,7 @@ impl Config {
 
             } else if line.starts_with("helth check interval:") {
                 let health_check_interval = line.trim_start_matches("helth check interval:").trim();
-                self.health_check_interval = Duration::from_millis(health_check_interval.parse::<u64>().expect("Invalid helth check interval"));
+                self.health_check_interval = Duration::from_secs(health_check_interval.parse::<u64>().expect("Invalid helth check interval"));
             }
         }
 

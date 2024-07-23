@@ -15,6 +15,7 @@ use tokio::time::sleep;
 use crate::{Algorithm, Config};
 mod algos;
 use algos::round_robin::RoundRobin;
+use algos::weighted_round_robin::WeightedRoundRobin;
 use algos::static_lb::StaticLB;
 
 fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
@@ -89,7 +90,10 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
             let load_balancer = Arc::new(Mutex::new(RoundRobin::new(Arc::clone(&config))));
             drop(listen(Arc::clone(&config), load_balancer).await);
         }
-        Algorithm::WeightedRoundRobin => {}
+        Algorithm::WeightedRoundRobin => {
+            let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new(Arc::clone(&config))));
+            drop(listen(Arc::clone(&config), load_balancer).await);
+        }
         Algorithm::LeastConnections => {}
         Algorithm::WeightedLeastConnections => {}
         Algorithm::LeastResponseTime => {}
