@@ -1,8 +1,9 @@
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
 use std::error::Error;
 use std::time::Duration;
+use std::{env, process};
 
 mod lb;
 
@@ -122,11 +123,40 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut config = Config::new();
     let ref_config = config.update("config.yaml")?;
 
-    println!("{:?}", ref_config); // remove
+    let args: Vec<String> = env::args().collect();
 
-    // cli
+    if args.len() > 1 {
+        match run(args, ref_config) {
+            true => drop(lb::start_lb(config)),
+            false => process::exit(0)
+        }
+    } else {
+        println!(r#" ________  ___  ________  ________  ___  ___  ________      "#);
+        println!(r#"|\   ____\|\  \|\   __  \|\   ____\|\  \|\  \|\   ____\     "#);
+        println!(r#"\ \  \___|\ \  \ \  \|\  \ \  \___|\ \  \\\  \ \  \___|_    "#);
+        println!(r#" \ \  \    \ \  \ \   _  _\ \  \    \ \  \\\  \ \_____  \   "#);
+        println!(r#"  \ \  \____\ \  \ \  \\  \\ \  \____\ \  \\\  \|____|\  \  "#);
+        println!(r#"   \ \_______\ \__\ \__\\ _\\ \_______\ \_______\____\_\  \ "#);
+        println!(r#"    \|_______|\|__|\|__|\|__|\|_______|\|_______|\_________\"#);
+        println!("Type h or ? for a list of available commands");
 
-    drop(lb::start_lb(config));
+        let usn = whoami::username() + &String::from("@circus");
+
+        let mut cli_completed = false;
+        while !cli_completed {
+            let mut arg = String::new();
+
+            print!("{usn}:> ");
+            io::stdout().flush().unwrap();
+            io::stdin().read_line(&mut arg).unwrap();
+
+            let mut args: Vec<String> = arg.trim().split_whitespace().map(String::from).collect();
+            args.insert(0, "Blank".to_string());
+
+            cli_completed = run(args, ref_config);
+        }
+        drop(lb::start_lb(config));
+    }
 
     Ok(())
 }
@@ -141,4 +171,61 @@ fn get_algo(algo: &str) -> Algorithm {
         "weighted_least_response_time" => Algorithm::WeightedLeastResponseTime,
         _ => Algorithm::RoundRobin, // Default algorithms
     }
+}
+
+fn run(args: Vec<String>, config: &Config) -> bool {  
+    match args[1].as_str() {
+        "h" | "?" => {
+            help();
+            false
+        },
+        "start" => true,
+        //"stop" => lb::stop_lb(config).unwrap(), //Implement later
+        "p" => {
+            let _p: u32 = match args[2].trim().parse() {
+                Ok(prt) => prt,
+                Err(e) => {
+                    println!("Invalid argument passed as port number: {:?}", e);
+                    return false;
+                }
+            };
+            //lb::change_port(p); //Implement later
+            false
+        },
+        "a" => {
+            let _a = get_algo(args[2].trim()); //Fully implement later
+            false
+        },
+        "s" => {
+            let mut s_count: usize = 0;
+
+            for serve_health in config.alive.iter() {
+                if *serve_health {
+                    s_count += 1;
+                }
+            }
+
+            println!("{s_count} servers available");
+
+            false
+        },
+        "q" => {
+            println!("Exiting..");
+            process::exit(0);
+        },
+        _ => {
+            println!("Unknown argument passed");
+            false
+        }
+    }
+}
+
+fn help() {
+    println!("h or ? -> Displays this list of available commands");
+    println!("q -> Quit program. Applicable only when program is run with no arguments");
+    println!("start -> Starts the load balancer");
+    //println!("stop -> Stops the load balancer");
+    println!("p <port_number> -> Changes load balancer port to specified port. Takes one more argument as port number");
+    println!("a <algorithm> -> Changes load balancer algorithm to specified algorithm. Takes one more argument as algorithm name");
+    println!("s -> Shows number of available servers");
 }
