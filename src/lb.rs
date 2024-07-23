@@ -76,15 +76,15 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     let algo = { config.lock().unwrap().algo.clone() };
 
     match algo {
-        Algorithm::round_robin => {
+        Algorithm::RoundRobin => {
             let load_balancer = Arc::new(Mutex::new(RoundRobin::new(Arc::clone(&config))));
             drop(listen(Arc::clone(&config), load_balancer).await);
         }
-        Algorithm::weighted_round_robin => {}
-        Algorithm::least_connections => {}
-        Algorithm::weighted_least_connections => {}
-        Algorithm::least_response_time => {}
-        Algorithm::weighted_least_response_time => {}
+        Algorithm::WeightedRoundRobin => {}
+        Algorithm::LeastConnections => {}
+        Algorithm::WeightedLeastConnections => {}
+        Algorithm::LeastResponseTime => {}
+        Algorithm::WeightedLeastResponseTime => {}
     }
 
     Ok(())

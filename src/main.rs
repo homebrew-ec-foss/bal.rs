@@ -1,4 +1,3 @@
-use std::clone;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
@@ -26,7 +25,7 @@ impl Config {
     fn new() -> Self {
         Config {
             load_balancer: "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer 
-            algo: Algorithm::round_robin, // using round robin as default algorithm
+            algo: Algorithm::RoundRobin, // using round robin as default algorithm
             servers: Vec::new(),
             weights: Vec::new(),
             alive: Vec::new(),
@@ -111,12 +110,12 @@ impl Config {
 
 #[derive(Debug, Clone)]
 enum Algorithm {
-    round_robin,
-    weighted_round_robin,
-    least_connections,
-    weighted_least_connections,
-    least_response_time,
-    weighted_least_response_time,
+    RoundRobin,
+    WeightedRoundRobin,
+    LeastConnections,
+    WeightedLeastConnections,
+    LeastResponseTime,
+    WeightedLeastResponseTime,
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -127,19 +126,19 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     // cli
 
-    lb::start_lb(config);
+    drop(lb::start_lb(config));
 
     Ok(())
 }
 
 fn get_algo(algo: &str) -> Algorithm {
     match algo {
-        "round_robin" => Algorithm::round_robin,
-        "weighted_round_robin" => Algorithm::weighted_round_robin,
-        "least_connections" => Algorithm::least_connections,
-        "weighted_least_connections" => Algorithm::weighted_least_connections,
-        "least_response_time" => Algorithm::least_response_time,
-        "weighted_least_response_time" => Algorithm::weighted_least_response_time,
-        _ => Algorithm::round_robin, // Default algorithms
+        "round_robin" => Algorithm::RoundRobin,
+        "weighted_round_robin" => Algorithm::WeightedRoundRobin,
+        "least_connections" => Algorithm::LeastConnections,
+        "weighted_least_connections" => Algorithm::WeightedLeastConnections,
+        "least_response_time" => Algorithm::LeastResponseTime,
+        "weighted_least_response_time" => Algorithm::WeightedLeastResponseTime,
+        _ => Algorithm::RoundRobin, // Default algorithms
     }
 }
