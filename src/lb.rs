@@ -5,14 +5,11 @@ use std::sync::{Arc, Mutex};
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::Response;
-use hyper::Uri;
-use hyper::{body::Bytes, Request};
+use hyper::{body::Bytes, Request, Uri, Response};
 use hyper_util::rt::TokioIo;
 use std::str::FromStr;
 use std::time::Instant;
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
+use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
 
 use crate::{Algorithm, Config};
