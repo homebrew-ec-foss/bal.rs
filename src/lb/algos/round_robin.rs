@@ -1,6 +1,6 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use crate::lb::LoadBalancer;
+use crate::lb::{servers_alive, LoadBalancer};
 use crate::Config;
 
 pub struct RoundRobin {
@@ -15,11 +15,17 @@ impl RoundRobin {
             counter: AtomicUsize::new(0),
         }
     }
+    
 }
 
 impl LoadBalancer for RoundRobin {
-    fn get_server(&self) -> u32 {
-        let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.config.lock().unwrap().servers.len();
-        index as u32
+    fn get_server(&self) -> Option<u32> {
+        while servers_alive(&self.config.lock().unwrap().alive) {
+            let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.config.lock().unwrap().servers.len();
+            if (self.config.lock().unwrap().alive[index]) {
+                return Some(index as u32);
+            }
+        }
+        return None;
     }
 }

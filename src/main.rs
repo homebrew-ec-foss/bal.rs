@@ -18,6 +18,7 @@ struct Config {
     max_connections: Vec<u32>,
     timeout: Duration,
     max_retries: u32,
+    health_check_interval: Duration,
 }
 
 impl Config {
@@ -33,6 +34,7 @@ impl Config {
             max_connections: Vec::new(),
             timeout: Duration::from_secs(0),
             max_retries: 0,
+            health_check_interval: Duration::from_secs(0),
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&Config> {
@@ -95,6 +97,10 @@ impl Config {
             } else if line.starts_with("max retries:") {
                 let max_retries = line.trim_start_matches("max retries:").trim();
                 self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
+
+            } else if line.starts_with("helth check interval:") {
+                let health_check_interval = line.trim_start_matches("helth check interval:").trim();
+                self.health_check_interval = Duration::from_millis(health_check_interval.parse::<u64>().expect("Invalid helth check interval"));
             }
         }
 

@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::thread::sleep;
 
 use hyper::Response;
 use tokio::net::TcpStream;
@@ -46,6 +47,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
     
     println!("Server is running on http://{}", addr);
+
     let listener = TcpListener::bind(addr).await?; // We create a TcpListener and bind it to load balancer address
 
     loop { // starting a loop to continuously accept incoming connections
@@ -98,12 +100,16 @@ where
     }
 }
 
-async  fn get_request<T>(req: Arc<Request<hyper::body::Incoming>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Option<Result<Response<Full<Bytes>>, Infallible>>
+async fn get_request<T>(req: Arc<Request<hyper::body::Incoming>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Option<Result<Response<Full<Bytes>>, Infallible>>
 where
     T: LoadBalancer,
 {
-    let index = load_balancer.lock().unwrap().get_server() as usize;
-    
+    let index = load_balancer.lock().unwrap().get_server();
+    if (index == None) {
+        return None;
+    }
+    let index = index.unwrap() as usize;
+
     let addr= config.lock().unwrap().servers[index].clone();
 
     println!("request forwarded to server {}", addr);
@@ -193,5 +199,5 @@ async fn send_request(request:String) -> Result<Bytes, Box<dyn std::error::Error
 }
 
 pub trait LoadBalancer {
-    fn get_server(&self) -> u32;
+    fn get_server(&self) -> Option<u32>;
 }
