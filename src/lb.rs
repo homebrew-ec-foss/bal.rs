@@ -12,6 +12,7 @@ use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::Uri;
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use crate::Config;
 mod algos;
@@ -25,6 +26,15 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes 
     
     let addr_str = format!("{}:{}", host, port); // Combine host and port into a SocketAddr
     SocketAddr::from_str(&addr_str).map_err(|_| "Failed to parse SocketAddr")
+}
+
+fn servers_alive(status: &Vec<bool>) -> bool {
+    for &value in status {
+        if value {
+            return true;
+        }
+    }
+    false
 }
 
 #[tokio::main]
@@ -53,7 +63,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
         // !!!!!!!!!! idk smtg virtual thread thing should go down here
         tokio::task::spawn(async move { // spawns a tokio task to server multiple connections concurrently
             if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(move |req| handle_request(req, Arc::clone(&config_clone), Arc::clone(&load_balancer_clone)))).await
+                .serve_connection(io, service_fn(move |req| {handle_request(Arc::new(req), Arc::clone(&config_clone), Arc::clone(&load_balancer_clone))})).await
             {
                 eprintln!("Error serving connection: {:?}", err);
             }
@@ -63,34 +73,75 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     Ok(())
 }
 
-async fn handle_request<T>(req: Request<hyper::body::Incoming>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Result<Response<Full<Bytes>>, Infallible> 
+async fn handle_request<T>(req: Arc<Request<hyper::body::Incoming>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Result<Response<Full<Bytes>>, Infallible>
 where
     T: LoadBalancer,
 {
-    let addr = load_balancer.lock().unwrap().get_server();
-    println!("request forwarded to server {}", addr);
-    let request = format!("{}{}", addr, req.uri());
-    let data = send_request(request).await;
-    match data {
-        Ok(data) => {
-            Ok(Response::new(Full::new(data)))
-        }
-        Err(err) => {
-            // Handle the error, such as logging it or returning an error response
-            eprintln!("Error occurred: {:?}", err);
-            // Example error response, adjust as per your application logic
+    loop {
+        if servers_alive(&config.lock().unwrap().alive) {
+            match get_request(Arc::clone(&req), Arc::clone(&config), Arc::clone(&load_balancer)).await {
+                Some(request) => {
+                    return request;
+                },
+                None => {
+                    println!("running again");
+                }
+            }
+        } else {
+            let body = format!("No servers available, please try again"); //writes the body of html file
             let response = Response::builder()
                 .status(500)
-                .body(Full::default())
+                .body(Full::new(Bytes::from(body)))
                 .unwrap();
-            Ok(response)
+            return Ok(response);
         }
     }
 }
 
-async fn send_request(reqyest:String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
+async  fn get_request<T>(req: Arc<Request<hyper::body::Incoming>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Option<Result<Response<Full<Bytes>>, Infallible>>
+where
+    T: LoadBalancer,
+{
+    let index = load_balancer.lock().unwrap().get_server() as usize;
+    
+    let addr= config.lock().unwrap().servers[index].clone();
+
+    println!("request forwarded to server {}", addr);
+    
+    let request = format!("{}{}", addr, req.uri());
+    
+    let start = Instant::now();
+    config.lock().unwrap().connections[index] += 1;
+    
+    let data = send_request(request).await;
+    // println!("{:?}", data);
+        
+    let duration = start.elapsed();
+    config.lock().unwrap().response_time[index] = duration;
+    config.lock().unwrap().connections[index] -= 1;
+        
+    match data {
+        Ok(data) => {
+            return Some(Ok(Response::new(Full::new(data))));
+        }
+        Err(err) => {
+                // Handle the error, such as logging it or returning an error response
+            config.lock().unwrap().alive[index] = false;
+                // eprintln!("Error occurred: {:?}", err);
+                // Example error response, adjust as per your application logic
+                // let response = Response::builder()
+                // .status(500)
+                // .body(Full::default())
+                // .unwrap();
+                // return Ok(response)
+            return None;
+        }
+    };
+}
+
+async fn send_request(request:String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
     // Parse our URL...
-    let url = reqyest.parse::<hyper::Uri>()?;
+    let url = request.parse::<hyper::Uri>()?;
 
     // Get the host and the port
     let host = url.host().expect("uri has no host");
@@ -142,5 +193,5 @@ async fn send_request(reqyest:String) -> Result<Bytes, Box<dyn std::error::Error
 }
 
 pub trait LoadBalancer {
-    fn get_server(&self) -> hyper::Uri;
+    fn get_server(&self) -> u32;
 }

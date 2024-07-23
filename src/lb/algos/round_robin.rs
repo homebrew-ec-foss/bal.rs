@@ -18,8 +18,8 @@ impl RoundRobin {
 }
 
 impl LoadBalancer for RoundRobin {
-    fn get_server(&self) -> hyper::Uri {
+    fn get_server(&self) -> u32 {
         let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.config.lock().unwrap().servers.len();
-        self.config.lock().unwrap().servers[index].clone()
+        index as u32
     }
 }
