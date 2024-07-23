@@ -121,12 +121,12 @@ enum Algorithm {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut config = Config::new();
-    let ref_config = config.update("config.yaml")?;
+    config.update("config.yaml")?;
 
     let args: Vec<String> = env::args().collect();
 
     if args.len() > 1 {
-        match run(args, ref_config) {
+        match run(args, &mut config) {
             true => drop(lb::start_lb(config)),
             false => process::exit(0)
         }
@@ -153,7 +153,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut args: Vec<String> = arg.trim().split_whitespace().map(String::from).collect();
             args.insert(0, "Blank".to_string());
 
-            cli_completed = run(args, ref_config);
+            cli_completed = run(args, &mut config);
         }
         drop(lb::start_lb(config));
     }
@@ -173,7 +173,7 @@ fn get_algo(algo: &str) -> Algorithm {
     }
 }
 
-fn run(args: Vec<String>, config: &Config) -> bool {  
+fn run(args: Vec<String>, config: &mut Config) -> bool {  
     match args[1].as_str() {
         "h" | "?" => {
             help();
@@ -194,6 +194,8 @@ fn run(args: Vec<String>, config: &Config) -> bool {
         },
         "a" => {
             let _a = get_algo(args[2].trim()); //Fully implement later
+            config.algo = _a;
+
             false
         },
         "s" => {
