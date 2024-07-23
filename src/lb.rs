@@ -8,7 +8,7 @@ use hyper::service::service_fn;
 use hyper::{body::Bytes, Request, Uri, Response};
 use hyper_util::rt::TokioIo;
 use std::str::FromStr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
 
@@ -55,7 +55,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
             for i in 0..len {
                 let static_lb_clone = Arc::clone(&static_lb);
                 let config_clone_ = Arc::clone(&config_clone);
-                tasks.push(tokio::task::spawn(async move {
+                let task = tokio::task::spawn(async move {
                     static_lb_clone.lock().unwrap().update(i as u32);
                     drop(
                         handle_request(
@@ -66,7 +66,10 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                         )
                         .await,
                     );
-                }))
+                });
+                
+                sleep(Duration::from_millis(10)).await;
+                tasks.push(task);
             }
 
             for task in tasks {
@@ -158,7 +161,7 @@ where
     T: LoadBalancer,
 {
     loop {
-        if servers_alive(&config.lock().unwrap().alive) {
+        if servers_alive(&config.lock().unwrap().alive) | health_check {
             match get_request(
                 Arc::clone(&req),
                 Arc::clone(&config),
