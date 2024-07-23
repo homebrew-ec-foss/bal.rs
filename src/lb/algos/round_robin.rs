@@ -1,24 +1,25 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use crate::lb::LoadBalancer;
+use crate::Config;
 
-pub struct round_robin {
-    backends: Arc<Vec<hyper::Uri>>,
+pub struct RoundRobin {
+    config: Arc<Mutex<Config>>,
     counter: AtomicUsize,
 }
 
-impl round_robin {
-    pub fn new(backends: Vec<hyper::Uri>) -> Self {
-        round_robin {
-            backends: Arc::new(backends),
+impl RoundRobin {
+    pub fn new(config: Arc<Mutex<Config>>) -> Self {
+        RoundRobin {
+            config: config,
             counter: AtomicUsize::new(0),
         }
     }
 }
 
-impl LoadBalancer for round_robin {
-    fn get_server(&self) -> hyper::Uri {
-        let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.backends.len();
-        self.backends[index].clone()
+impl LoadBalancer for RoundRobin {
+    fn get_server(&self) -> u32 {
+        let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.config.lock().unwrap().servers.len();
+        index as u32
     }
 }
