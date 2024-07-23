@@ -73,9 +73,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
         }
     });
 
-    let algo = {
-        config.lock().unwrap().algo.clone()
-    };
+    let algo = { config.lock().unwrap().algo.clone() };
 
     match algo {
         Algorithm::round_robin => {
