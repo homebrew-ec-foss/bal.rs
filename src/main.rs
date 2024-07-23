@@ -7,7 +7,7 @@ use std::{env, process};
 
 mod lb;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct Config {
     load_balancer: hyper::Uri,
     algo: Algorithm,
@@ -128,17 +128,17 @@ fn main(){
 
     if args.len() > 1 {
         match run(args, ref_config) {
-            true => drop(lb::start_lb(config.clone())),
+            true => drop(lb::start_lb(config)),
             false => process::exit(0)
         }
     } else {
         println!(r#" ________  ___  ________  ________  ___  ___  ________      "#);
         println!(r#"|\   ____\|\  \|\   __  \|\   ____\|\  \|\  \|\   ____\     "#);
-        println!(r#"\ \  \___|\ \  \ \  \|\  \ \  \___|\ \  \\\  \ \  \___|_    "#);
-        println!(r#" \ \  \    \ \  \ \   _  _\ \  \    \ \  \\\  \ \_____  \   "#);
-        println!(r#"  \ \  \____\ \  \ \  \\  \\ \  \____\ \  \\\  \|____|\  \  "#);
-        println!(r#"   \ \_______\ \__\ \__\\ _\\ \_______\ \_______\____\_\  \ "#);
-        println!(r#"    \|_______|\|__|\|__|\|__|\|_______|\|_______|\_________\"#);
+        println!(r#"\ \  \|\ \  \ \  \|\  \ \  \|\ \  \\\  \ \  \|    "#);
+        println!(r#" \ \  \    \ \  \ \   _  \ \  \    \ \  \\\  \ \____  \   "#);
+        println!(r#"  \ \  \\ \  \ \  \\  \\ \  \\ \  \\\  \||\  \  "#);
+        println!(r#"   \ \\ \\ \\\ _\\ \\ \\\\  \ "#);
+        println!(r#"    \||\||\||\||\||\||\\"#);
         println!("Type h or ? for a list of available commands");
 
         let usn = whoami::username() + &String::from("@circus");
@@ -156,8 +156,8 @@ fn main(){
 
             cli_completed = run(args, ref_config);
         }
+        drop(lb::start_lb(config));
     }
-    drop(lb::start_lb(config));
 }
 
 fn get_algo(algo: &str) -> Algorithm {
