@@ -217,13 +217,9 @@ where
     println!("request forwarded to server {}", addr);
 
     let request = match &*req {
-        Some(req) => {
-            println!("{:?}", req);
-            format!("{}{}", addr, req.uri().to_string().trim_start_matches("/"))
-        },
+        Some(req) => format!("{}{}", addr, req.uri().to_string().trim_start_matches("/")),
         None => addr.to_string(),
     };
-    println!("{:?}", request);
 
     let start = Instant::now();
     config.lock().unwrap().connections[index] += 1;
@@ -309,5 +305,5 @@ async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Erro
 }
 
 pub trait LoadBalancer {
-    fn get_server(&self) -> Option<u32>;
+    fn get_server(&mut self) -> Option<u32>;
 }

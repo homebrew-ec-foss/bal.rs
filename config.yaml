@@ -1,10 +1,10 @@
 load balancer: http://127.0.0.1:8000
 !!  load balancer address
 
-algorithm: round_robin
+algorithm: weighted_round_robin
 !!  load balancer algorithm
 
-servers: http://127.0.0.1:3000, http://127.0.0.1:3001, http://127.0.0.1:3002, http://127.0.0.1:3003, http://127.0.0.1:3004, http://127.0.0.1:3005
+servers: http://127.0.0.1:3000, http://127.0.0.1:3001, http://127.0.0.1:3002, http://127.0.0.1:3003
 !!  server address
 
 weights: 20, 30, 10, 40

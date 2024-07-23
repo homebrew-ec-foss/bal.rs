@@ -16,7 +16,7 @@ impl StaticLB {
 }
 
 impl LoadBalancer for StaticLB {
-    fn get_server(&self) -> Option<u32> {
+    fn get_server(&mut self) -> Option<u32> {
         return Some(self.index);
     }
 }

@@ -19,7 +19,7 @@ impl RoundRobin {
 }
 
 impl LoadBalancer for RoundRobin {
-    fn get_server(&self) -> Option<u32> {
+    fn get_server(&mut self) -> Option<u32> {
         while servers_alive(&self.config.lock().unwrap().alive) {
             let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.config.lock().unwrap().servers.len();
             if self.config.lock().unwrap().alive[index] {
