@@ -51,20 +51,29 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
 
     tokio::task::spawn(async move {
         loop {
+            let mut tasks = Vec::new();
             for i in 0..len {
-                static_lb.lock().unwrap().update(i as u32);
-                drop(
-                    handle_request(
-                        Arc::new(None),
-                        Arc::clone(&config_clone),
-                        Arc::clone(&static_lb),
-                        true,
-                    )
-                    .await,
-                );
+                let static_lb_clone = Arc::clone(&static_lb);
+                let config_clone_ = Arc::clone(&config_clone);
+                tasks.push(tokio::task::spawn(async move {
+                    static_lb_clone.lock().unwrap().update(i as u32);
+                    drop(
+                        handle_request(
+                            Arc::new(None),
+                            Arc::clone(&config_clone_),
+                            Arc::clone(&static_lb_clone),
+                            true,
+                        )
+                        .await,
+                    );
+                }))
             }
 
-            println!("Updated config: {:?}", Arc::clone(&config_clone));
+            for task in tasks {
+                drop(task.await);
+            }
+
+            println!("updated config {:?}", &config_clone);
 
             sleep(health_check_interval).await;
         }
