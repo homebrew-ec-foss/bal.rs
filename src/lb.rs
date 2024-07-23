@@ -1,8 +1,8 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::thread::sleep;
 
+use tokio::time::sleep;
 use hyper::Response;
 use tokio::net::TcpStream;
 use hyper::{Request, body::Bytes};
@@ -18,6 +18,7 @@ use std::time::{Duration, Instant};
 use crate::Config;
 mod algos;
 use algos::round_robin::RoundRobin;
+use algos::static_lb::StaticLB;
 
 fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes Uri and returns SocketAddr
     let authority = uri.authority().ok_or("URI does not have an authority part")?; // Ensure the URI has an authority part (host and port)
@@ -48,6 +49,25 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     
     println!("Server is running on http://{}", addr);
 
+    let static_lb = Arc::new(Mutex::new(StaticLB::new()));
+    let len = config.lock().unwrap().servers.len();
+    let health_check_interval = config.lock().unwrap().health_check_interval.clone();
+    let config_clone = Arc::clone(&config);
+
+    tokio::task::spawn(async move {
+        loop {
+
+            for i in 0..len {
+                static_lb.lock().unwrap().update(i as u32);
+                handle_request(Arc::new(None), Arc::clone(&config_clone), Arc::clone(&static_lb), true).await;
+            }
+
+            println!("Updated config: {:?}", Arc::clone(&config_clone));
+
+            sleep(health_check_interval).await;
+        }
+    });
+
     let listener = TcpListener::bind(addr).await?; // We create a TcpListener and bind it to load balancer address
 
     loop { // starting a loop to continuously accept incoming connections
@@ -65,7 +85,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
         // !!!!!!!!!! idk smtg virtual thread thing should go down here
         tokio::task::spawn(async move { // spawns a tokio task to server multiple connections concurrently
             if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(move |req| {handle_request(Arc::new(req), Arc::clone(&config_clone), Arc::clone(&load_balancer_clone))})).await
+                .serve_connection(io, service_fn(move |req| {handle_request(Arc::new(Some(req)), Arc::clone(&config_clone), Arc::clone(&load_balancer_clone), false)})).await
             {
                 eprintln!("Error serving connection: {:?}", err);
             }
@@ -75,7 +95,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     Ok(())
 }
 
-async fn handle_request<T>(req: Arc<Request<hyper::body::Incoming>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Result<Response<Full<Bytes>>, Infallible>
+async fn handle_request<T>(req: Arc<Option<Request<hyper::body::Incoming>>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>, health_check: bool) -> Result<Response<Full<Bytes>>, Infallible>
 where
     T: LoadBalancer,
 {
@@ -89,6 +109,13 @@ where
                     println!("running again");
                 }
             }
+            if (health_check) {
+                let response = Response::builder()
+                    .status(500)
+                    .body(Full::new(Bytes::default()))
+                    .unwrap();
+                return Ok(response);
+            }
         } else {
             let body = format!("No servers available, please try again"); //writes the body of html file
             let response = Response::builder()
@@ -100,7 +127,7 @@ where
     }
 }
 
-async fn get_request<T>(req: Arc<Request<hyper::body::Incoming>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Option<Result<Response<Full<Bytes>>, Infallible>>
+async fn get_request<T>(req: Arc<Option<Request<hyper::body::Incoming>>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Option<Result<Response<Full<Bytes>>, Infallible>>
 where
     T: LoadBalancer,
 {
@@ -114,7 +141,10 @@ where
 
     println!("request forwarded to server {}", addr);
     
-    let request = format!("{}{}", addr, req.uri());
+    let request = match &*req {
+        Some(req) => format!("{}{}", addr, req.uri()),
+        None => addr.to_string(),
+    };
     
     let start = Instant::now();
     config.lock().unwrap().connections[index] += 1;
@@ -128,6 +158,7 @@ where
         
     match data {
         Ok(data) => {
+            config.lock().unwrap().alive[index] = true;
             return Some(Ok(Response::new(Full::new(data))));
         }
         Err(err) => {
