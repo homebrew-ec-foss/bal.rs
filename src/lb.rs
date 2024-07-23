@@ -2,30 +2,33 @@ use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use tokio::time::sleep;
-use hyper::Response;
-use tokio::net::TcpStream;
-use hyper::{Request, body::Bytes};
-use hyper_util::rt::TokioIo;
 use http_body_util::{BodyExt, Empty, Full};
-use tokio::net::TcpListener;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
+use hyper::Response;
 use hyper::Uri;
+use hyper::{body::Bytes, Request};
+use hyper_util::rt::TokioIo;
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::time::Instant;
+use tokio::net::TcpListener;
+use tokio::net::TcpStream;
+use tokio::time::sleep;
 
-use crate::Config;
+use crate::{Algorithm, Config};
 mod algos;
 use algos::round_robin::RoundRobin;
 use algos::static_lb::StaticLB;
 
-fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes Uri and returns SocketAddr
-    let authority = uri.authority().ok_or("URI does not have an authority part")?; // Ensure the URI has an authority part (host and port)
-    
+fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
+    // takes Uri and returns SocketAddr
+    let authority = uri
+        .authority()
+        .ok_or("URI does not have an authority part")?; // Ensure the URI has an authority part (host and port)
+
     let host = authority.host(); // Extract host and port
     let port = authority.port_u16().ok_or("URI does not have a port")?;
-    
+
     let addr_str = format!("{}:{}", host, port); // Combine host and port into a SocketAddr
     SocketAddr::from_str(&addr_str).map_err(|_| "Failed to parse SocketAddr")
 }
@@ -40,14 +43,9 @@ fn servers_alive(status: &Vec<bool>) -> bool {
 }
 
 #[tokio::main]
-pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> { // starts the load balancer
+pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // starts the load balancer
     let config = Arc::new(Mutex::new(config));
-
-    let load_balancer = Arc::new(Mutex::new(RoundRobin::new(Arc::clone(&config))));
-
-    let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
-    
-    println!("Server is running on http://{}", addr);
 
     let static_lb = Arc::new(Mutex::new(StaticLB::new()));
     let len = config.lock().unwrap().servers.len();
@@ -56,10 +54,17 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
 
     tokio::task::spawn(async move {
         loop {
-
             for i in 0..len {
                 static_lb.lock().unwrap().update(i as u32);
-                handle_request(Arc::new(None), Arc::clone(&config_clone), Arc::clone(&static_lb), true).await;
+                drop(
+                    handle_request(
+                        Arc::new(None),
+                        Arc::clone(&config_clone),
+                        Arc::clone(&static_lb),
+                        true,
+                    )
+                    .await,
+                );
             }
 
             println!("Updated config: {:?}", Arc::clone(&config_clone));
@@ -68,12 +73,46 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
         }
     });
 
+    let algo = {
+        config.lock().unwrap().algo.clone()
+    };
+
+    match algo {
+        Algorithm::round_robin => {
+            let load_balancer = Arc::new(Mutex::new(RoundRobin::new(Arc::clone(&config))));
+            drop(listen(Arc::clone(&config), load_balancer).await);
+        }
+        Algorithm::weighted_round_robin => {}
+        Algorithm::least_connections => {}
+        Algorithm::weighted_least_connections => {}
+        Algorithm::least_response_time => {}
+        Algorithm::weighted_least_response_time => {}
+    }
+
+    Ok(())
+}
+
+async fn listen<T>(
+    config: Arc<Mutex<Config>>,
+    load_balancer: Arc<Mutex<T>>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    T: LoadBalancer + Send + 'static,
+{
+    let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
+
+    println!("Server is running on http://{}", addr);
+
     let listener = TcpListener::bind(addr).await?; // We create a TcpListener and bind it to load balancer address
 
-    loop { // starting a loop to continuously accept incoming connections
+    loop {
+        // starting a loop to continuously accept incoming connections
         let (stream, _) = listener.accept().await?;
         let client_addr = stream.peer_addr()?;
-        println!("Accepted connection from {} to load balancer {}", client_addr, addr);
+        println!(
+            "Accepted connection from {} to load balancer {}",
+            client_addr, addr
+        );
 
         // Use an adapter to access something implementing `tokio::io` traits as if they implement
         // `hyper::rt` IO traits.
@@ -83,33 +122,54 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
         let load_balancer_clone = Arc::clone(&load_balancer);
 
         // !!!!!!!!!! idk smtg virtual thread thing should go down here
-        tokio::task::spawn(async move { // spawns a tokio task to server multiple connections concurrently
+        tokio::task::spawn(async move {
+            // spawns a tokio task to server multiple connections concurrently
             if let Err(err) = http1::Builder::new()
-                .serve_connection(io, service_fn(move |req| {handle_request(Arc::new(Some(req)), Arc::clone(&config_clone), Arc::clone(&load_balancer_clone), false)})).await
+                .serve_connection(
+                    io,
+                    service_fn(move |req| {
+                        handle_request(
+                            Arc::new(Some(req)),
+                            Arc::clone(&config_clone),
+                            Arc::clone(&load_balancer_clone),
+                            false,
+                        )
+                    }),
+                )
+                .await
             {
                 eprintln!("Error serving connection: {:?}", err);
             }
         });
     }
-
-    Ok(())
 }
 
-async fn handle_request<T>(req: Arc<Option<Request<hyper::body::Incoming>>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>, health_check: bool) -> Result<Response<Full<Bytes>>, Infallible>
+async fn handle_request<T>(
+    req: Arc<Option<Request<hyper::body::Incoming>>>,
+    config: Arc<Mutex<Config>>,
+    load_balancer: Arc<Mutex<T>>,
+    health_check: bool,
+) -> Result<Response<Full<Bytes>>, Infallible>
 where
     T: LoadBalancer,
 {
     loop {
         if servers_alive(&config.lock().unwrap().alive) {
-            match get_request(Arc::clone(&req), Arc::clone(&config), Arc::clone(&load_balancer)).await {
+            match get_request(
+                Arc::clone(&req),
+                Arc::clone(&config),
+                Arc::clone(&load_balancer),
+            )
+            .await
+            {
                 Some(request) => {
                     return request;
-                },
+                }
                 None => {
                     println!("running again");
                 }
             }
-            if (health_check) {
+            if health_check {
                 let response = Response::builder()
                     .status(500)
                     .body(Full::new(Bytes::default()))
@@ -127,56 +187,60 @@ where
     }
 }
 
-async fn get_request<T>(req: Arc<Option<Request<hyper::body::Incoming>>>, config: Arc<Mutex<Config>>, load_balancer: Arc<Mutex<T>>) -> Option<Result<Response<Full<Bytes>>, Infallible>>
+async fn get_request<T>(
+    req: Arc<Option<Request<hyper::body::Incoming>>>,
+    config: Arc<Mutex<Config>>,
+    load_balancer: Arc<Mutex<T>>,
+) -> Option<Result<Response<Full<Bytes>>, Infallible>>
 where
     T: LoadBalancer,
 {
     let index = load_balancer.lock().unwrap().get_server();
-    if (index == None) {
+    if index == None {
         return None;
     }
     let index = index.unwrap() as usize;
 
-    let addr= config.lock().unwrap().servers[index].clone();
+    let addr = config.lock().unwrap().servers[index].clone();
 
     println!("request forwarded to server {}", addr);
-    
+
     let request = match &*req {
         Some(req) => format!("{}{}", addr, req.uri()),
         None => addr.to_string(),
     };
-    
+
     let start = Instant::now();
     config.lock().unwrap().connections[index] += 1;
-    
+
     let data = send_request(request).await;
     // println!("{:?}", data);
-        
+
     let duration = start.elapsed();
     config.lock().unwrap().response_time[index] = duration;
     config.lock().unwrap().connections[index] -= 1;
-        
+
     match data {
         Ok(data) => {
             config.lock().unwrap().alive[index] = true;
             return Some(Ok(Response::new(Full::new(data))));
         }
-        Err(err) => {
-                // Handle the error, such as logging it or returning an error response
+        Err(_) => {
+            // Handle the error, such as logging it or returning an error response
             config.lock().unwrap().alive[index] = false;
-                // eprintln!("Error occurred: {:?}", err);
-                // Example error response, adjust as per your application logic
-                // let response = Response::builder()
-                // .status(500)
-                // .body(Full::default())
-                // .unwrap();
-                // return Ok(response)
+            // eprintln!("Error occurred: {:?}", err);
+            // Example error response, adjust as per your application logic
+            // let response = Response::builder()
+            // .status(500)
+            // .body(Full::default())
+            // .unwrap();
+            // return Ok(response)
             return None;
         }
     };
 }
 
-async fn send_request(request:String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
+async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
     // Parse our URL...
     let url = request.parse::<hyper::Uri>()?;
 

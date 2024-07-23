@@ -1,3 +1,4 @@
+use std::clone;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
@@ -108,7 +109,7 @@ impl Config {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Algorithm {
     round_robin,
     weighted_round_robin,
