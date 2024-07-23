@@ -22,7 +22,7 @@ impl LoadBalancer for RoundRobin {
     fn get_server(&self) -> Option<u32> {
         while servers_alive(&self.config.lock().unwrap().alive) {
             let index = self.counter.fetch_add(1, Ordering::SeqCst) % self.config.lock().unwrap().servers.len();
-            if self.config.lock().unwrap().alive[index] {
+            if self.config.lock().unwrap().alive[index] && self.config.lock().unwrap().connections[index] < self.config.lock().unwrap().max_connections[index] {
                 return Some(index as u32);
             }
         }
