@@ -1,13 +1,13 @@
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::path::Path;
-use std::error::Error;
+//use std::error::Error;
 use std::time::Duration;
 use std::{env, process};
 
 mod lb;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Config {
     load_balancer: hyper::Uri,
     algo: Algorithm,
@@ -19,6 +19,7 @@ struct Config {
     max_connections: Vec<u32>,
     timeout: Duration,
     max_retries: u32,
+    health_check_interval: Duration
 }
 
 impl Config {
@@ -34,6 +35,7 @@ impl Config {
             max_connections: Vec::new(),
             timeout: Duration::from_secs(0),
             max_retries: 0,
+            health_check_interval: Duration::from_secs(0)
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&Config> {
@@ -96,14 +98,17 @@ impl Config {
             } else if line.starts_with("max retries:") {
                 let max_retries = line.trim_start_matches("max retries:").trim();
                 self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
+
+            } else if line.starts_with("health check interval:") {
+                let health_check_interval = line.trim_start_matches("health check interval:").trim();
+                self.health_check_interval = Duration::from_millis(health_check_interval.parse::<u64>().expect("Invalid health check interval"));
             }
         }
-
         Ok(self)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Algorithm {
     RoundRobin,
     WeightedRoundRobin,
@@ -114,10 +119,18 @@ enum Algorithm {
 }
 
 fn main(){
+    let mut config = Config::new();
+    let ref_config = config.update("config.yaml").unwrap();
+
+    println!("{:?}", ref_config); // remove
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() > 1 {
-        run(args);
+        match run(args, ref_config) {
+            true => drop(lb::start_lb(config.clone())),
+            false => process::exit(0)
+        }
     } else {
         println!(r#" ________  ___  ________  ________  ___  ___  ________      "#);
         println!(r#"|\   ____\|\  \|\   __  \|\   ____\|\  \|\  \|\   ____\     "#);
@@ -130,7 +143,8 @@ fn main(){
 
         let usn = whoami::username() + &String::from("@circus");
 
-        loop {
+        let mut cli_completed = false;
+        while !cli_completed {
             let mut arg = String::new();
 
             print!("{usn}:> ");
@@ -140,9 +154,10 @@ fn main(){
             let mut args: Vec<String> = arg.trim().split_whitespace().map(String::from).collect();
             args.insert(0, "Blank".to_string());
 
-            run(args);
+            cli_completed = run(args, ref_config);
         }
     }
+    drop(lb::start_lb(config));
 }
 
 fn get_algo(algo: &str) -> Algorithm {
@@ -157,42 +172,50 @@ fn get_algo(algo: &str) -> Algorithm {
     }
 }
 
-fn run(args: Vec<String>) {
-    let mut config = Config::new();
-    let ref_config = config.update("config.yaml").unwrap();
-    
-    //println!("{:?}", ref_config); // remove
-
+fn run(args: Vec<String>, config: &Config) -> bool {  
     match args[1].as_str() {
-        "h" | "?" => help(),
-        "start" => lb::start_lb(config).unwrap(),
+        "h" | "?" => {
+            help();
+            false
+        },
+        "start" => true,
         //"stop" => lb::stop_lb(config).unwrap(), //Implement later
         "p" => {
-            let p: u32 = match args[2].trim().parse() {
+            let _p: u32 = match args[2].trim().parse() {
                 Ok(prt) => prt,
-                Err(_) => {
-                    println!("Error: Invalid argument passed as port number");
-                    process::exit(0); //Have to change to rerun instead of exiting
+                Err(e) => {
+                    println!("Invalid argument passed as port number: {:?}", e);
+                    return false;
                 }
             };
             //lb::change_port(p); //Implement later
+            false
+        },
+        "a" => {
+            let _a = get_algo(args[2].trim()); //Fully implement later
+            false
         },
         "s" => {
             let mut s_count: usize = 0;
 
-            for serve_health in ref_config.alive.iter() {
+            for serve_health in config.alive.iter() {
                 if *serve_health {
                     s_count += 1;
                 }
             }
 
             println!("{s_count} servers available");
+
+            false
         },
         "q" => {
             println!("Exiting..");
             process::exit(0);
         },
-        _ => println!("Unknown argument passed")
+        _ => {
+            println!("Unknown argument passed");
+            false
+        }
     }
 }
 
@@ -200,7 +223,8 @@ fn help() {
     println!("h or ? -> Displays this list of available commands");
     println!("q -> Quit program. Applicable only when program is run with no arguments");
     println!("start -> Starts the load balancer");
-    println!("stop -> Stops the load balancer");
+    //println!("stop -> Stops the load balancer");
     println!("p <port_number> -> Changes load balancer port to specified port. Takes one more argument as port number");
+    println!("a <algorithm> -> Changes load balancer algorithm to specified algorithm. Takes one more argument as algorithm name");
     println!("s -> Shows number of available servers");
 }
