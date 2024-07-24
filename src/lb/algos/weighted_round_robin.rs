@@ -1,27 +1,26 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
-use crate::lb::LoadBalancer;
+use std::sync::{Arc, Mutex};
+use crate::lb::{servers_alive, LoadBalancer};
+use crate::Config;
 
-pub struct weighted_round_robin {
-    backends: Arc<Vec<(hyper::Uri, u32)>>,
-    weights: Arc<Vec<u32>>,
+pub struct WeightedRoundRobin {
+    config: Arc<Mutex<Config>>,
     current_index: AtomicUsize,
     current_weight: AtomicUsize,
     max_weight: usize,
     gcd_weight: usize,
 }
 
-impl weighted_round_robin {
-    pub fn new(backends: Vec<(hyper::Uri)>, weights: Vec<u32>) -> Self {
-        let max_weight = (weights.iter().cloned().fold(0, u32::max) * 100) as usize;
+impl WeightedRoundRobin {
+    pub fn new(config: Arc<Mutex<Config>>) -> Self {
+	let binding=config.clone();
+        let config_lock = binding.lock().unwrap();
+        let weights: Vec<f64> = config_lock.weights.iter().map(|&w| w as f64).collect();
+        let max_weight = (weights.iter().cloned().fold(0./0., f64::max) * 100.0) as usize;
         let gcd_weight = Self::calculate_gcd(&weights);
-
-        weighted_round_robin {
-            backends: Arc::new(backends.into_iter()
-                                .zip(weights.iter())
-                                .map(|(backend, &weight)| (backend, weight))
-                                .collect()),
-            weights: Arc::new(weights),
+        
+        WeightedRoundRobin {
+            config,
             current_index: AtomicUsize::new(0),
             current_weight: AtomicUsize::new(max_weight),
             max_weight,
@@ -29,10 +28,10 @@ impl weighted_round_robin {
         }
     }
 
-    fn calculate_gcd(weights: &Vec<u32>) -> usize {
+    fn calculate_gcd(weights: &Vec<f64>) -> usize {
         weights
             .iter()
-            .map(|&weight| (weight * 100) as usize)
+            .map(|&weight| (weight * 100.0).round() as usize)
             .fold(0, |acc, x| Self::gcd(acc, x))
     }
 
@@ -41,16 +40,21 @@ impl weighted_round_robin {
     }
 }
 
-impl LoadBalancer for weighted_round_robin {
-    fn get_server(&mut self) -> hyper::Uri {
+impl LoadBalancer for WeightedRoundRobin {
+    fn get_server(&self) -> Option<u32> {
         loop {
+            let config = self.config.lock().unwrap();
+            if !servers_alive(&config.alive) {
+                return None;
+            }
+
             let current_index = self.current_index.load(Ordering::SeqCst);
-            let new_index = (current_index + 1) % self.backends.len();
+            let new_index = (current_index + 1) % config.servers.len();
             self.current_index.store(new_index, Ordering::SeqCst);
 
             if new_index == 0 {
                 let current_weight = self.current_weight.load(Ordering::SeqCst);
-                let new_weight = current_weight - self.gcd_weight;
+                let new_weight = current_weight.saturating_sub(self.gcd_weight);
                 self.current_weight.store(new_weight, Ordering::SeqCst);
 
                 if new_weight <= 0 {
@@ -58,9 +62,11 @@ impl LoadBalancer for weighted_round_robin {
                 }
             }
 
-            let weight = (self.weights[new_index] * 100) as usize;
+            let weight = (config.weights[new_index] as f64 * 100.0).round() as usize;
             if self.current_weight.load(Ordering::SeqCst) <= weight {
-                return self.backends[new_index].0.clone();
+                if config.alive[new_index] {
+                    return Some(new_index as u32);
+                }
             }
         }
     }

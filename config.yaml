@@ -1,0 +1,23 @@
+load balancer: http://127.0.0.1:8000
+!!  load balancer address
+
+algorithm: weighted_round_robin
+!!  load balancer algorithm
+
+servers: http://127.0.0.1:3000, http://127.0.0.1:3001, http://127.0.0.1:3002, http://127.0.0.1:3003
+!!  server address
+
+weights: 20, 30, 10, 40
+!!  server weights
+
+max connections: 1000, 1000, 1000, 1000
+!!  max connections
+
+timeout: 10000
+!!  max server response time (ms) (doesn't do anything rn, will impliment later)
+
+max retries: 1
+!!  max retires (doesn't do anything rn, will impliment later)
+
+helth check interval: 60000
+!!  interval (in ms) for checking the health of the server
