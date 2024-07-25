@@ -1,17 +1,18 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{body::Bytes, Request, Uri, Response};
+use hyper::{body::Bytes, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
-use std::str::FromStr;
-use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc::{self, Receiver, Sender};
 use tokio::time::sleep;
-use tokio::sync::mpsc;
+
 use crate::{Algorithm, Config};
 mod algos;
 use algos::round_robin::RoundRobin;
@@ -19,31 +20,21 @@ use algos::static_lb::StaticLB;
 use algos::weighted_round_robin::WeightedRoundRobin;
 
 fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
-    // takes Uri and returns SocketAddr
     let authority = uri
         .authority()
-        .ok_or("URI does not have an authority part")?; // Ensure the URI has an authority part (host and port)
-
-    let host = authority.host(); // Extract host and port
+        .ok_or("URI does not have an authority part")?;
+    let host = authority.host();
     let port = authority.port_u16().ok_or("URI does not have a port")?;
-
-    let addr_str = format!("{}:{}", host, port); // Combine host and port into a SocketAddr
+    let addr_str = format!("{}:{}", host, port);
     SocketAddr::from_str(&addr_str).map_err(|_| "Failed to parse SocketAddr")
 }
 
 fn servers_alive(status: &Vec<bool>) -> bool {
-    for &value in status {
-        if value {
-            return true;
-        }
-    }
-    false
+    status.iter().any(|&value| value)
 }
 
 #[tokio::main]
 pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let (tx, mut rx) = mpsc::channel::<Request<hyper::body::Incoming>>(100);
-
     let config = Arc::new(Mutex::new(config));
 
     let static_lb = Arc::new(Mutex::new(StaticLB::new()));
@@ -51,14 +42,15 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     let health_check_interval = config.lock().unwrap().health_check_interval.clone();
     let config_clone = Arc::clone(&config);
 
-    // Cloning static_lb before moving into the task
-    let static_lb_clone_for_task = Arc::clone(&static_lb);
+    // Create a channel for queueing requests
+    let (tx, rx) = mpsc::channel::<(Request<hyper::body::Incoming>, Sender<Response<Full<Bytes>>>)>(100);
 
+    // Spawn a task for handling health checks
     tokio::task::spawn(async move {
         loop {
             let mut tasks = Vec::new();
             for i in 0..len {
-                let static_lb_clone = Arc::clone(&static_lb_clone_for_task);
+                let static_lb_clone = Arc::clone(&static_lb);
                 let config_clone_ = Arc::clone(&config_clone);
                 let task = tokio::task::spawn(async move {
                     static_lb_clone.lock().unwrap().update(i as u32);
@@ -72,7 +64,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                         .await,
                     );
                 });
-                
+
                 sleep(Duration::from_millis(10)).await;
                 tasks.push(task);
             }
@@ -89,64 +81,36 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
 
     let algo = { config.lock().unwrap().algo.clone() };
 
-    // Spawn a task to process requests from the queue
-    let config_clone_for_requests = Arc::clone(&config);
-    let static_lb_clone_for_requests = Arc::clone(&static_lb);
-
-    tokio::spawn(async move {
-        while let Some(request) = rx.recv().await {
-            handle_request(
-                Arc::new(Some(request)),
-                Arc::clone(&config_clone_for_requests),
-                Arc::clone(&static_lb_clone_for_requests),
-                false,
-            )
-            .await
-            .unwrap_or_else(|err| {
-                eprintln!("Error handling request: {:?}", err);
-                Response::builder()
-                    .status(500)
-                    .body(Full::new(Bytes::from("Internal Server Error")))
-                    .unwrap()
-            });
-        }
-    });
-
+    // Spawn a task to process the request queue
+    let config_clone = Arc::clone(&config);
     match algo {
         Algorithm::RoundRobin => {
             let load_balancer = Arc::new(Mutex::new(RoundRobin::new(Arc::clone(&config))));
-            drop(listen(Arc::clone(&config), load_balancer, tx).await);
+            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
         }
         Algorithm::WeightedRoundRobin => {
             let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new(Arc::clone(&config))));
-            drop(listen(Arc::clone(&config), load_balancer, tx).await);
+            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
         }
-
         Algorithm::LeastConnections => {}
         Algorithm::WeightedLeastConnections => {}
         Algorithm::LeastResponseTime => {}
         Algorithm::WeightedLeastResponseTime => {}
     }
 
-    Ok(())
+    // Start listening for incoming connections
+    listen(tx, config).await
 }
 
-async fn listen<T>(
+async fn listen(
+    tx: Sender<(Request<hyper::body::Incoming>, Sender<Response<Full<Bytes>>>)>,
     config: Arc<Mutex<Config>>,
-    load_balancer: Arc<Mutex<T>>,
-    tx: mpsc::Sender<Request<hyper::body::Incoming>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
-where
-    T: LoadBalancer + Send + 'static,
-{
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
-
     println!("Server is running on http://{}", addr);
 
-    let listener = TcpListener::bind(addr).await?; // We create a TcpListener and bind it to load balancer address
-
+    let listener = TcpListener::bind(addr).await?;
     loop {
-        // starting a loop to continuously accept incoming connections
         let (stream, _) = listener.accept().await?;
         let client_addr = stream.peer_addr()?;
         println!(
@@ -154,35 +118,17 @@ where
             client_addr, addr
         );
 
-        // Use an adapter to access something implementing `tokio::io` traits as if they implement
-        // `hyper::rt` IO traits.
         let io = TokioIo::new(stream);
-
         let tx_clone = tx.clone();
 
         tokio::task::spawn(async move {
-            // spawns a tokio task to server multiple connections concurrently
             if let Err(err) = http1::Builder::new()
                 .serve_connection(
                     io,
                     service_fn(move |req| {
-                        let tx_clone = tx_clone.clone();
-                        async move {
-                            // Enqueue the request
-                            if tx_clone.send(req).await.is_err() {
-                                eprintln!("Error sending request to queue");
-                                return Ok::<_, Infallible>(Response::builder()
-                                    .status(500)
-                                    .body(Full::new(Bytes::from("Internal Server Error")))
-                                    .unwrap());
-                            }
-
-                            // Return a placeholder response, actual response will be sent later
-                            Ok::<_, Infallible>(Response::builder()
-                                .status(202)
-                                .body(Full::new(Bytes::from("Request is being processed")))
-                                .unwrap())
-                        }
+                        let (response_tx, mut response_rx) = mpsc::channel(1);
+                        tx_clone.try_send((req, response_tx)).unwrap();
+                        async move { Ok::<_, Infallible>(response_rx.recv().await.unwrap()) }
                     }),
                 )
                 .await
@@ -190,6 +136,27 @@ where
                 eprintln!("Error serving connection: {:?}", err);
             }
         });
+    }
+}
+
+async fn process_queue<T>(
+    mut rx: Receiver<(Request<hyper::body::Incoming>, Sender<Response<Full<Bytes>>>)>,
+    config: Arc<Mutex<Config>>,
+    load_balancer: Arc<Mutex<T>>,
+) where
+    T: LoadBalancer + Send + 'static,
+{
+    while let Some((req, response_tx)) = rx.recv().await {
+        let response = handle_request(
+            Arc::new(Some(req)),
+            Arc::clone(&config),
+            Arc::clone(&load_balancer),
+            false,
+        )
+        .await
+        .unwrap();
+
+        response_tx.send(response).await.unwrap();
     }
 }
 
@@ -226,7 +193,7 @@ where
                 return Ok(response);
             }
         } else {
-            let body = format!("No servers available, please try again"); //writes the body of html file
+            let body = format!("No servers available, please try again");
             let response = Response::builder()
                 .status(500)
                 .body(Full::new(Bytes::from(body)))
@@ -245,13 +212,12 @@ where
     T: LoadBalancer,
 {
     let index = load_balancer.lock().unwrap().get_server();
-    if index == None {
+    if index.is_none() {
         return None;
     }
     let index = index.unwrap() as usize;
 
     let addr = config.lock().unwrap().servers[index].clone();
-
     println!("request forwarded to server {}", addr);
 
     let request = match &*req {
@@ -263,8 +229,6 @@ where
     config.lock().unwrap().connections[index] += 1;
 
     let data = send_request(request).await;
-    // println!("{:?}", data);
-
     let duration = start.elapsed();
     config.lock().unwrap().response_time[index] = duration;
     config.lock().unwrap().connections[index] -= 1;
@@ -272,66 +236,41 @@ where
     match data {
         Ok(data) => {
             config.lock().unwrap().alive[index] = true;
-            return Some(Ok(Response::new(Full::new(data))));
+            Some(Ok(Response::new(Full::new(data))))
         }
         Err(_) => {
-            // Handle the error, such as logging it or returning an error response
             config.lock().unwrap().alive[index] = false;
-            // eprintln!("Error occurred: {:?}", err);
-            // Example error response, adjust as per your application logic
-            // let response = Response::builder()
-            // .status(500)
-            // .body(Full::default())
-            // .unwrap();
-            // return Ok(response)
-            return None;
+            None
         }
-    };
+    }
 }
 
 async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
-    // Parse our URL...
     let url = request.parse::<hyper::Uri>()?;
-
-    // Get the host and the port
     let host = url.host().expect("uri has no host");
     let port = url.port_u16().unwrap_or(80);
-
     let address = format!("{}:{}", host, port);
 
-    // Open a TCP connection to the remote host
     let stream = TcpStream::connect(address).await?;
-
-    // Use an adapter to access something implementing `tokio::io` traits as if they implement
-    // `hyper::rt` IO traits.
     let io = TokioIo::new(stream);
 
-    // Create the Hyper client
     let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
-
-    // Spawn a task to poll the connection, driving the HTTP state
     tokio::task::spawn(async move {
         if let Err(err) = conn.await {
             println!("Connection failed: {:?}", err);
         }
     });
 
-    // The authority of our URL will be the hostname of the httpbin remote
     let authority = url.authority().unwrap().clone();
-
-    // Create an HTTP request with an empty body and a HOST header
     let req = Request::builder()
         .uri(url)
         .header(hyper::header::HOST, authority.as_str())
         .body(Empty::<Bytes>::new())?;
 
-    // Await the response...
     let mut res = sender.send_request(req).await?;
-
     println!("Response status: {}", res.status());
 
     let mut full_body = Vec::new();
-
     while let Some(next) = res.frame().await {
         let frame = next?;
         if let Some(chunk) = frame.data_ref() {
