@@ -5,21 +5,39 @@ use std::error::Error;
 use std::time::Duration;
 use std::{env, process};
 
+use hyper::server;
+
 mod lb;
 
 #[derive(Debug)]
 struct Config {
     load_balancer: hyper::Uri,
     algo: Algorithm,
-    servers: Vec<hyper::Uri>,
-    weights: Vec<u32>,
-    alive: Vec<bool>,
-    response_time: Vec<Duration>,
-    connections: Vec<u32>,
-    max_connections: Vec<u32>,
+    servers: Vec<Server>,
     timeout: Duration,
     max_retries: u32,
     health_check_interval: Duration,
+}
+
+#[derive(Debug)]
+struct Server {
+    addr: hyper::Uri,
+    weight: u32,
+    response_time: Duration,
+    connections: u32,
+    max_connections: u32
+}
+
+impl Server {
+    fn new(addr: hyper::Uri, weight: u32, max_connections: u32) -> Self {
+        Server {
+            addr,
+            weight,
+            max_connections,
+            response_time: Duration::from_secs(0),
+            connections: 0,
+        }
+    }
 }
 
 impl Config {
@@ -28,11 +46,6 @@ impl Config {
             load_balancer: "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer 
             algo: Algorithm::RoundRobin, // using round robin as default algorithm
             servers: Vec::new(),
-            weights: Vec::new(),
-            alive: Vec::new(),
-            response_time: Vec::new(),
-            connections: Vec::new(),
-            max_connections: Vec::new(),
             timeout: Duration::from_secs(0),
             max_retries: 0,
             health_check_interval: Duration::from_secs(0),
@@ -42,6 +55,10 @@ impl Config {
         let path = Path::new(path);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
+
+        let mut servers: Vec<hyper::Uri> = Vec::new();
+        let mut weights: Vec<u32> = Vec::new();
+        let mut max_connections: Vec<u32> = Vec::new();
 
         for line in reader.lines() {
             let line = line?;
@@ -58,8 +75,8 @@ impl Config {
                 self.algo = get_algo(algo);
 
             } else if line.starts_with("servers:") {
-                let servers = line.trim_start_matches("servers:").trim();
-                self.servers = servers
+                let servers_str = line.trim_start_matches("servers:").trim();
+                servers = servers_str
                                     .split(",")
                                     .map(|server| server
                                         .trim()
@@ -68,22 +85,18 @@ impl Config {
                                     .collect();
 
             } else if line.starts_with("weights:") {
-                let weights = line.trim_start_matches("weights:").trim();
-                self.weights = weights
+                let weights_str = line.trim_start_matches("weights:").trim();
+                weights = weights_str
                                     .split(",")
                                     .map(|weight| weight
                                         .trim()
                                         .parse::<u32>()
                                         .expect("Invalid weight"))
                                     .collect();
-
-                self.alive = vec![true; self.servers.len()];
-                self.response_time = vec![Duration::from_secs(0); self.servers.len()];
-                self.connections = vec![0; self.servers.len()];
                 
             } else if line.starts_with("max connections:") {
-                let max_connections = line.trim_start_matches("max connections:").trim();
-                self.max_connections = max_connections
+                let max_connections_str = line.trim_start_matches("max connections:").trim();
+                max_connections = max_connections_str
                                         .split(",")
                                         .map(|max_connection| max_connection
                                                 .trim()
@@ -102,6 +115,10 @@ impl Config {
             } else if line.starts_with("helth check interval:") {
                 let health_check_interval = line.trim_start_matches("helth check interval:").trim();
                 self.health_check_interval = Duration::from_secs(health_check_interval.parse::<u64>().expect("Invalid helth check interval"));
+            }
+            
+            for i in 0..servers.len() {
+                self.servers.push(Server::new(servers[i].clone(), weights[i], max_connections[i]));
             }
         }
 
@@ -199,15 +216,7 @@ fn run(args: Vec<String>, config: &mut Config) -> bool {
             false
         },
         "s" => {
-            let mut s_count: usize = 0;
-
-            for serve_health in config.alive.iter() {
-                if *serve_health {
-                    s_count += 1;
-                }
-            }
-
-            println!("{s_count} servers available");
+            println!("{} servers available", config.servers.len());
 
             false
         },
