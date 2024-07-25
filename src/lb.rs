@@ -11,7 +11,7 @@ use std::str::FromStr;
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
-
+use tokio::sync::mpsc;
 use crate::{Algorithm, Config};
 mod algos;
 use algos::round_robin::RoundRobin;
@@ -42,7 +42,8 @@ fn servers_alive(status: &Vec<bool>) -> bool {
 
 #[tokio::main]
 pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // starts the load balancer
+    let (tx, mut rx) = mpsc::channel::<Request<hyper::body::Incoming>>(100);
+
     let config = Arc::new(Mutex::new(config));
 
     let static_lb = Arc::new(Mutex::new(StaticLB::new()));
@@ -50,11 +51,14 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     let health_check_interval = config.lock().unwrap().health_check_interval.clone();
     let config_clone = Arc::clone(&config);
 
+    // Cloning static_lb before moving into the task
+    let static_lb_clone_for_task = Arc::clone(&static_lb);
+
     tokio::task::spawn(async move {
         loop {
             let mut tasks = Vec::new();
             for i in 0..len {
-                let static_lb_clone = Arc::clone(&static_lb);
+                let static_lb_clone = Arc::clone(&static_lb_clone_for_task);
                 let config_clone_ = Arc::clone(&config_clone);
                 let task = tokio::task::spawn(async move {
                     static_lb_clone.lock().unwrap().update(i as u32);
@@ -85,14 +89,37 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
 
     let algo = { config.lock().unwrap().algo.clone() };
 
+    // Spawn a task to process requests from the queue
+    let config_clone_for_requests = Arc::clone(&config);
+    let static_lb_clone_for_requests = Arc::clone(&static_lb);
+
+    tokio::spawn(async move {
+        while let Some(request) = rx.recv().await {
+            handle_request(
+                Arc::new(Some(request)),
+                Arc::clone(&config_clone_for_requests),
+                Arc::clone(&static_lb_clone_for_requests),
+                false,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                eprintln!("Error handling request: {:?}", err);
+                Response::builder()
+                    .status(500)
+                    .body(Full::new(Bytes::from("Internal Server Error")))
+                    .unwrap()
+            });
+        }
+    });
+
     match algo {
         Algorithm::RoundRobin => {
             let load_balancer = Arc::new(Mutex::new(RoundRobin::new(Arc::clone(&config))));
-            drop(listen(Arc::clone(&config), load_balancer).await);
+            drop(listen(Arc::clone(&config), load_balancer, tx).await);
         }
         Algorithm::WeightedRoundRobin => {
             let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new(Arc::clone(&config))));
-            drop(listen(Arc::clone(&config), load_balancer).await);
+            drop(listen(Arc::clone(&config), load_balancer, tx).await);
         }
 
         Algorithm::LeastConnections => {}
@@ -107,6 +134,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
 async fn listen<T>(
     config: Arc<Mutex<Config>>,
     load_balancer: Arc<Mutex<T>>,
+    tx: mpsc::Sender<Request<hyper::body::Incoming>>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     T: LoadBalancer + Send + 'static,
@@ -130,22 +158,31 @@ where
         // `hyper::rt` IO traits.
         let io = TokioIo::new(stream);
 
-        let config_clone = Arc::clone(&config);
-        let load_balancer_clone = Arc::clone(&load_balancer);
+        let tx_clone = tx.clone();
 
-        // !!!!!!!!!! idk smtg virtual thread thing should go down here
         tokio::task::spawn(async move {
             // spawns a tokio task to server multiple connections concurrently
             if let Err(err) = http1::Builder::new()
                 .serve_connection(
                     io,
                     service_fn(move |req| {
-                        handle_request(
-                            Arc::new(Some(req)),
-                            Arc::clone(&config_clone),
-                            Arc::clone(&load_balancer_clone),
-                            false,
-                        )
+                        let tx_clone = tx_clone.clone();
+                        async move {
+                            // Enqueue the request
+                            if tx_clone.send(req).await.is_err() {
+                                eprintln!("Error sending request to queue");
+                                return Ok::<_, Infallible>(Response::builder()
+                                    .status(500)
+                                    .body(Full::new(Bytes::from("Internal Server Error")))
+                                    .unwrap());
+                            }
+
+                            // Return a placeholder response, actual response will be sent later
+                            Ok::<_, Infallible>(Response::builder()
+                                .status(202)
+                                .body(Full::new(Bytes::from("Request is being processed")))
+                                .unwrap())
+                        }
                     }),
                 )
                 .await
