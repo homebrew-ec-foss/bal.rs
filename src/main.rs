@@ -5,8 +5,6 @@ use std::error::Error;
 use std::time::Duration;
 use std::{env, process};
 
-use hyper::server;
-
 mod lb;
 
 #[derive(Debug)]
