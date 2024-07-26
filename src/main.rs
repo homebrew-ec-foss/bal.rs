@@ -15,6 +15,7 @@ struct Config {
     timeout: Duration,
     max_retries: u32,
     health_check_interval: Duration,
+    dead_servers: Vec<Server>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -47,6 +48,7 @@ impl Config {
             timeout: Duration::from_secs(0),
             max_retries: 0,
             health_check_interval: Duration::from_secs(0),
+            dead_servers: Vec::new(),
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&Config> {
@@ -91,6 +93,7 @@ impl Config {
                                         .parse::<u32>()
                                         .expect("Invalid weight"))
                                     .collect();
+                // println!("{:?}", weights);
                 
             } else if line.starts_with("max connections:") {
                 let max_connections_str = line.trim_start_matches("max connections:").trim();
@@ -114,10 +117,10 @@ impl Config {
                 let health_check_interval = line.trim_start_matches("helth check interval:").trim();
                 self.health_check_interval = Duration::from_secs(health_check_interval.parse::<u64>().expect("Invalid helth check interval"));
             }
-            
-            for i in 0..servers.len() {
-                self.servers.push(Server::new(servers[i].clone(), weights[i], max_connections[i]));
-            }
+        }
+        
+        for i in 0..servers.len() {
+            self.servers.push(Server::new(servers[i].clone(), weights[i], max_connections[i]));
         }
 
         Ok(self)

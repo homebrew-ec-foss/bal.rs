@@ -1,7 +1,7 @@
 load balancer: http://127.0.0.1:8000
 !!  load balancer address
 
-algorithm: weighted_round_robin
+algorithm: round_robin
 !!  load balancer algorithm
 
 servers: http://127.0.0.1:3000, http://127.0.0.1:3001, http://127.0.0.1:3002, http://127.0.0.1:3003
