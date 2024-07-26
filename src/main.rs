@@ -17,7 +17,7 @@ struct Config {
     health_check_interval: Duration,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq)]
 struct Server {
     addr: hyper::Uri,
     weight: u32,

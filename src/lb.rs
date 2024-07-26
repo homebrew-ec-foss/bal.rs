@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex};    
 
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
@@ -12,11 +12,11 @@ use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::sleep;
 
-use crate::{Algorithm, Config};
+use crate::{Algorithm, Config, Server};
 mod algos;
 use algos::round_robin::RoundRobin;
-use algos::weighted_round_robin::WeightedRoundRobin;
-use algos::static_lb::StaticLB;
+// use algos::weighted_round_robin::WeightedRoundRobin;
+// use algos::static_lb::StaticLB;
 
 fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
     // takes Uri and returns SocketAddr
@@ -31,68 +31,61 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
     SocketAddr::from_str(&addr_str).map_err(|_| "Failed to parse SocketAddr")
 }
 
-fn servers_alive(status: &Vec<bool>) -> bool {
-    for &value in status {
-        if value {
-            return true;
-        }
-    }
-    false
-}
-
 #[tokio::main]
-pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> { 
     // starts the load balancer
     let config = Arc::new(Mutex::new(config));
 
-    let static_lb = Arc::new(Mutex::new(StaticLB::new()));
-    let len = config.lock().unwrap().servers.len();
-    let health_check_interval = config.lock().unwrap().health_check_interval.clone();
-    let config_clone = Arc::clone(&config);
+    // let static_lb = Arc::new(Mutex::new(StaticLB::new()));
+    // let len = config.lock().unwrap().servers.len();
+    // let health_check_interval = config.lock().unwrap().health_check_interval.clone();
+    // let config_clone = Arc::clone(&config);
 
-    tokio::task::spawn(async move {
-        loop {
-            let mut tasks = Vec::new();
-            for i in 0..len {
-                let static_lb_clone = Arc::clone(&static_lb);
-                let config_clone_ = Arc::clone(&config_clone);
-                let task = tokio::task::spawn(async move {
-                    static_lb_clone.lock().unwrap().update(i as u32);
-                    drop(
-                        handle_request(
-                            Arc::new(None),
-                            Arc::clone(&config_clone_),
-                            Arc::clone(&static_lb_clone),
-                            true,
-                        )
-                        .await,
-                    );
-                });
+    // tokio::task::spawn(async move {
+    //     loop {
+    //         let mut tasks = Vec::new();
+    //         for i in 0..len {
+    //             let static_lb_clone = Arc::clone(&static_lb);
+    //             let config_clone_ = Arc::clone(&config_clone);
+    //             let task = tokio::task::spawn(async move {
+    //                 static_lb_clone.lock().unwrap().update(i as u32);
+    //                 drop(
+    //                     handle_request(
+    //                         Arc::new(None),
+    //                         Arc::clone(&config_clone_),
+    //                         Arc::clone(&static_lb_clone),
+    //                         true,
+    //                     )
+    //                     .await,
+    //                 );
+    //             });
                 
-                sleep(Duration::from_millis(10)).await;
-                tasks.push(task);
-            }
+    //             sleep(Duration::from_millis(10)).await;
+    //             tasks.push(task);
+    //         }
 
-            for task in tasks {
-                drop(task.await);
-            }
+    //         for task in tasks {
+    //             drop(task.await);
+    //         }
 
-            println!("updated config {:?}", &config_clone);
+    //         println!("updated config {:?}", &config_clone);
 
-            sleep(health_check_interval).await;
-        }
-    });
+    //         sleep(health_check_interval).await;
+    //     }
+    // });
 
-    let algo = { config.lock().unwrap().algo.clone() };
+    let algo = config.lock().unwrap().algo.clone();
 
     match algo {
         Algorithm::RoundRobin => {
-            let load_balancer = Arc::new(Mutex::new(RoundRobin::new(Arc::clone(&config))));
-            drop(listen(Arc::clone(&config), load_balancer).await);
+            let config_clone = Arc::clone(&config);
+            let load_balancer = Arc::new(Mutex::new(RoundRobin::new(config_clone)));
+            let config_clone = Arc::clone(&config);
+            drop(listen(config_clone, load_balancer).await);
         }
         Algorithm::WeightedRoundRobin => {
-            let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new(Arc::clone(&config))));
-            drop(listen(Arc::clone(&config), load_balancer).await);
+            // let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new(Arc::clone(&config))));
+            // drop(listen(Arc::clone(&config), load_balancer).await);
         }
         Algorithm::LeastConnections => {}
         Algorithm::WeightedLeastConnections => {}
@@ -110,11 +103,11 @@ async fn listen<T>(
 where
     T: LoadBalancer + Send + 'static,
 {
-    let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
+    let uri = &config.lock().unwrap().load_balancer;
+    let addr = uri_to_socket_addr(uri).unwrap();
+    let listener = TcpListener::bind(addr).await?; // We create a TcpListener and bind it to load balancer address
 
     println!("Server is running on http://{}", addr);
-
-    let listener = TcpListener::bind(addr).await?; // We create a TcpListener and bind it to load balancer address
 
     loop {
         // starting a loop to continuously accept incoming connections
@@ -142,8 +135,7 @@ where
                         handle_request(
                             Arc::new(Some(req)),
                             Arc::clone(&config_clone),
-                            Arc::clone(&load_balancer_clone),
-                            false,
+                            Arc::clone(&load_balancer_clone),   
                         )
                     }),
                 )
@@ -159,13 +151,13 @@ async fn handle_request<T>(
     req: Arc<Option<Request<hyper::body::Incoming>>>,
     config: Arc<Mutex<Config>>,
     load_balancer: Arc<Mutex<T>>,
-    health_check: bool,
 ) -> Result<Response<Full<Bytes>>, Infallible>
 where
     T: LoadBalancer,
 {
     loop {
-        if servers_alive(&config.lock().unwrap().alive) | health_check {
+        let len = config.lock().unwrap().servers.len();
+        if len > 0 {
             match get_request(
                 Arc::clone(&req),
                 Arc::clone(&config),
@@ -179,13 +171,6 @@ where
                 None => {
                     println!("running again");
                 }
-            }
-            if health_check {
-                let response = Response::builder()
-                    .status(500)
-                    .body(Full::new(Bytes::default()))
-                    .unwrap();
-                return Ok(response);
             }
         } else {
             let body = format!("No servers available, please try again"); //writes the body of html file
@@ -206,49 +191,53 @@ async fn get_request<T>(
 where
     T: LoadBalancer,
 {
-    let index = load_balancer.lock().unwrap().get_server();
-    if index == None {
-        return None;
-    }
-    let index = index.unwrap() as usize;
-
-    let addr = config.lock().unwrap().servers[index].clone();
-
-    println!("request forwarded to server {}", addr);
-
-    let request = match &*req {
-        Some(req) => format!("{}{}", addr, req.uri().to_string().trim_start_matches("/")),
-        None => addr.to_string(),
+    let index: usize;
+    let server = {
+        let mut config = config.lock().unwrap();
+        let index_opt = load_balancer.lock().unwrap().get_index(&config.servers);
+        if index_opt == None {
+            return None;
+        }
+        index = index_opt.unwrap();
+        let server = config.servers[index];
+        server.connections += 1;
+        server.clone();
     };
 
+    let request = match &*req {
+        Some(req) => format!("{}{}", server.addr.clone(), req.uri().to_string().trim_start_matches("/")),
+        None => server.addr.to_string(),
+    };
+
+    
+
     let start = Instant::now();
-    config.lock().unwrap().connections[index] += 1;
 
     let data = send_request(request).await;
     // println!("{:?}", data);
 
     let duration = start.elapsed();
-    config.lock().unwrap().response_time[index] = duration;
-    config.lock().unwrap().connections[index] -= 1;
+    config.lock().unwrap().servers[index].response_time = duration;
+    // config.lock().unwrap().connections[index] -= 1;
 
-    match data {
-        Ok(data) => {
-            config.lock().unwrap().alive[index] = true;
-            return Some(Ok(Response::new(Full::new(data))));
-        }
-        Err(_) => {
-            // Handle the error, such as logging it or returning an error response
-            config.lock().unwrap().alive[index] = false;
-            // eprintln!("Error occurred: {:?}", err);
-            // Example error response, adjust as per your application logic
-            // let response = Response::builder()
-            // .status(500)
-            // .body(Full::default())
-            // .unwrap();
-            // return Ok(response)
+    // match data {
+    //     Ok(data) => {
+    // //         // config.lock().unwrap().alive[index] = true;
+    //         return Some(Ok(Response::new(Full::new(data))));
+    //     }
+    //     Err(_) => {
+    // //         // Handle the error, such as logging it or returning an error response
+    // //         // config.lock().unwrap().alive[index] = false;
+    // //         // eprintln!("Error occurred: {:?}", err);
+    // //         // Example error response, adjust as per your application logic
+    // //         // let response = Response::builder()
+    // //         // .status(500)
+    // //         // .body(Full::default())
+    // //         // .unwrap();
+    // //         // return Ok(response)
             return None;
-        }
-    };
+    //     }
+    // };
 }
 
 async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
@@ -305,5 +294,5 @@ async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Erro
 }
 
 pub trait LoadBalancer {
-    fn get_server(&mut self) -> Option<u32>;
+    fn get_index(&mut self, servers: &Vec<Server>) -> Option<usize>;
 }
