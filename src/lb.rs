@@ -57,7 +57,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                         if let Some(server) = config.servers.get_mut(index) {
                             server.connections += 1;
                         }
-    
+
                         config.servers.get(index).cloned()
                     };
                     
@@ -181,9 +181,7 @@ where
             eprintln!("{}", err);
             return Ok(());
         }
-    }; 
-
-    
+    };
 
     loop {
         // starting a loop to continuously accept incoming connections
@@ -239,7 +237,7 @@ where
                     return request;
                 }
                 None => {
-                    eprintln!("reruting request to a new server");
+                    eprintln!("rerouting request to a new server");
                 }
             }
         } else {

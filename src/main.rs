@@ -113,8 +113,8 @@ impl Config {
                 let max_retries = line.trim_start_matches("max retries:").trim();
                 self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
 
-            } else if line.starts_with("helth check interval:") {
-                let health_check_interval = line.trim_start_matches("helth check interval:").trim();
+            } else if line.starts_with("health check interval:") {
+                let health_check_interval = line.trim_start_matches("health check interval:").trim();
                 self.health_check_interval = Duration::from_secs(health_check_interval.parse::<u64>().expect("Invalid helth check interval"));
             }
         }
