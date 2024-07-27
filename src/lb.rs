@@ -172,9 +172,18 @@ where
     T: LoadBalancer + Send + 'static,
 {
     let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
-    let listener = TcpListener::bind(addr).await?; // We create a TcpListener and bind it to load balancer address
+    let listener = match TcpListener::bind(addr).await { // We create a TcpListener and bind it to load balancer address
+        Ok(listener) => {
+            println!("load balancer is running on http://{}", addr);
+            listener
+        },
+        Err(err) => {
+            eprintln!("{}", err);
+            return Ok(());
+        }
+    }; 
 
-    println!("load balancer is running on http://{}", addr);
+    
 
     loop {
         // starting a loop to continuously accept incoming connections
