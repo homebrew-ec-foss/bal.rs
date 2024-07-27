@@ -110,7 +110,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                             if let Some(index) = index {
                                 let mut dead_server = config.dead_servers.remove(index);
                                 dead_server.connections = 0; // resets number of connections
-                                config.servers[index].response_time = duration; // updates response time
+                                dead_server.response_time = duration; // updates response time
                                 config.servers.push(dead_server); // sends dead server to `servers` vector
                             }
                         }
@@ -123,7 +123,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                 drop(task.await); // waits for all the servers to get updated
             }
 
-            println!("updated config: {:?}", &config_clone);
+            println!("updated config | health checker");
 
             sleep(health_check_interval).await;
         }
@@ -230,10 +230,11 @@ where
                     return request;
                 }
                 None => {
-                    println!("reruting request to a new server");
+                    eprintln!("reruting request to a new server");
                 }
             }
         } else {
+            eprintln!("No servers available");
             let body = format!("No servers available, please try again"); // writes the body of html file
             let response = Response::builder()
                 .status(500)
