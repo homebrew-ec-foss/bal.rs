@@ -3,7 +3,6 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex, MutexGuard};    
 
 use http_body_util::{BodyExt, Empty, Full};
-use hyper::header::DATE;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Bytes, Request, Uri, Response};
@@ -44,91 +43,91 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     };
     let config_clone = Arc::clone(&config); //creates a clone for health checker
 
-    // tokio::task::spawn(async move {
-    //     loop {
-    //         let mut tasks = Vec::new();
+    tokio::task::spawn(async move {
+        loop {
+            let mut tasks = Vec::new();
 
-    //         for index in 0..len {
-    //             let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
+            for index in 0..len {
+                let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
 
-    //             let task = tokio::task::spawn(async move {
-    //                 let server = { // gets a local copy of server
-    //                     let mut config = config_clone.lock().unwrap();
+                let task = tokio::task::spawn(async move {
+                    let server = { // gets a local copy of server
+                        let mut config = config_clone.lock().unwrap();
     
-    //                     if let Some(server) = config.servers.get_mut(index) {
-    //                         server.connections += 1;
-    //                     }
+                        if let Some(server) = config.servers.get_mut(index) {
+                            server.connections += 1;
+                        }
 
-    //                     config.servers.get(index).cloned()
-    //                 };
+                        config.servers.get(index).cloned()
+                    };
                     
-    //                 if let Some(server) = server { // checks if server exists
-    //                     let start = Instant::now();
-    //                     let response = timeout(timeout_duration, reqwest::get(server.addr.clone().to_string())).await; // sends a request to server
-    //                     let duration = start.elapsed(); // get's the response time
+                    if let Some(server) = server { // checks if server exists
+                        let start = Instant::now();
+                        let response = timeout(timeout_duration, reqwest::get(server.addr.clone().to_string())).await; // sends a request to server
+                        let duration = start.elapsed(); // get's the response time
     
-    //                     let mut config = config_clone.lock().unwrap();
+                        let mut config = config_clone.lock().unwrap();
     
-    //                     let index = config.servers.iter().position(|c_server| c_server.addr == server.addr); // get's the index of server
+                        let index = config.servers.iter().position(|c_server| c_server.addr == server.addr); // get's the index of server
                         
-    //                     if let Some(index) = index { // updates server data
-    //                         config.servers[index].response_time = duration;
+                        if let Some(index) = index { // updates server data
+                            config.servers[index].response_time = duration;
                             
-    //                         config.servers[index].connections -= 1;
-    //                     }
+                            config.servers[index].connections -= 1;
+                        }
     
-    //                     if let Err(_) = response { // sends server to dead server's list if server is dead
-    //                         if let Some(index) = index {
-    //                             let dead_server = config.servers.remove(index);
-    //                             config.dead_servers.push(dead_server);
-    //                         }
-    //                     }
-    //                 }
-    //             });
-    //             tasks.push(task);
-    //         }
+                        if let Err(_) = response { // sends server to dead server's list if server is dead
+                            if let Some(index) = index {
+                                let dead_server = config.servers.remove(index);
+                                config.dead_servers.push(dead_server);
+                            }
+                        }
+                    }
+                });
+                tasks.push(task);
+            }
 
-    //         for index in 0..len {
-    //             let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
+            for index in 0..len {
+                let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
                 
-    //             let task = tokio::task::spawn(async move {
-    //                 let dead_server = { // gets a local copy of daed servers
-    //                     let config = config_clone.lock().unwrap();
+                let task = tokio::task::spawn(async move {
+                    let dead_server = { // gets a local copy of daed servers
+                        let config = config_clone.lock().unwrap();
     
-    //                     config.dead_servers.get(index).cloned()
-    //                 };
+                        config.dead_servers.get(index).cloned()
+                    };
                     
-    //                 if let Some(dead_server) = dead_server {
-    //                     let start = Instant::now();
-    //                     let response = timeout(timeout_duration, reqwest::get(dead_server.addr.clone().to_string())).await; // sends a request to server
-    //                     let duration = start.elapsed(); // get's the response time
+                    if let Some(dead_server) = dead_server {
+                        let start = Instant::now();
+                        let response = timeout(timeout_duration, reqwest::get(dead_server.addr.clone().to_string())).await; // sends a request to server
+                        let duration = start.elapsed(); // get's the response time
     
-    //                     let mut config = config_clone.lock().unwrap();
+                        let mut config = config_clone.lock().unwrap();
     
-    //                     let index = config.dead_servers.iter().position(|c_dead_server| c_dead_server.addr == dead_server.addr); // get's the index of dead_server
+                        let index = config.dead_servers.iter().position(|c_dead_server| c_dead_server.addr == dead_server.addr); // get's the index of dead_server
     
-    //                     if let Ok(_) = response {
-    //                         if let Some(index) = index {
-    //                             let mut dead_server = config.dead_servers.remove(index);
-    //                             dead_server.connections = 0; // resets number of connections
-    //                             dead_server.response_time = duration; // updates response time
-    //                             config.servers.push(dead_server); // sends dead server to `servers` vector
-    //                         }
-    //                     }
-    //                 }
-    //             });
-    //             tasks.push(task);
-    //         }
+                        if let Ok(_) = response {
+                            if let Some(index) = index {
+                                let mut dead_server = config.dead_servers.remove(index);
+                                dead_server.connections = 0; // resets number of connections
+                                dead_server.response_time = duration; // updates response time
+                                config.servers.push(dead_server); // sends dead server to `servers` vector
+                            }
+                        }
+                    }
+                });
+                tasks.push(task);
+            }
 
-    //         for task in tasks {
-    //             drop(task.await); // waits for all the servers to get updated
-    //         }
+            for task in tasks {
+                drop(task.await); // waits for all the servers to get updated
+            }
 
-    //         println!("updated config | health checker");
+            println!("updated config | health checker");
 
-    //         sleep(health_check_interval).await;
-    //     }
-    // });
+            sleep(health_check_interval).await;
+        }
+    });
 
     let algo = {
         let config_lock = config.lock().unwrap();
