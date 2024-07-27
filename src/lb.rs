@@ -16,6 +16,7 @@ use crate::{Algorithm, Config};
 mod algos;
 use algos::round_robin::RoundRobin;
 use algos::weighted_round_robin::WeightedRoundRobin;
+use algos::least_response_time::LeastResponseTime;
 
 fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes Uri and returns SocketAddr
     let authority = uri
@@ -133,17 +134,18 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     match algo {
         Algorithm::RoundRobin => {
             let load_balancer = Arc::new(Mutex::new(RoundRobin::new()));
-            let config_clone = Arc::clone(&config);
-            drop(listen(config_clone, load_balancer).await);
+            drop(listen(config, load_balancer).await);
         }
         Algorithm::WeightedRoundRobin => {
             let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new()));
-            let config_clone = Arc::clone(&config);
-            drop(listen(config_clone, load_balancer).await);
+            drop(listen(config, load_balancer).await);
         }
         Algorithm::LeastConnections => {}
         Algorithm::WeightedLeastConnections => {}
-        Algorithm::LeastResponseTime => {}
+        Algorithm::LeastResponseTime => {
+            let load_balancer = Arc::new(Mutex::new(LeastResponseTime::new()));
+            drop(listen(config, load_balancer).await);
+        }
         Algorithm::WeightedLeastResponseTime => {}
     }
 
