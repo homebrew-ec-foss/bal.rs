@@ -18,6 +18,8 @@ use algos::round_robin::RoundRobin;
 use algos::weighted_round_robin::WeightedRoundRobin;
 use algos::least_response_time::LeastResponseTime;
 use algos::weighted_least_response_time::WeightedLeastResponseTime;
+use algos::least_connections::LeastConnections;
+use algos::weighted_least_connections::WeightedLeastConnections;
 
 fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes Uri and returns SocketAddr
     let authority = uri
@@ -141,8 +143,14 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
             let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new()));
             drop(listen(config, load_balancer).await);
         }
-        Algorithm::LeastConnections => {}
-        Algorithm::WeightedLeastConnections => {}
+        Algorithm::LeastConnections => {
+            let load_balancer = Arc::new(Mutex::new(LeastConnections::new()));
+            drop(listen(config, load_balancer).await);
+        }
+        Algorithm::WeightedLeastConnections => {
+            let load_balancer = Arc::new(Mutex::new(WeightedLeastConnections::new()));
+            drop(listen(config, load_balancer).await);
+        }
         Algorithm::LeastResponseTime => {
             let load_balancer = Arc::new(Mutex::new(LeastResponseTime::new()));
             drop(listen(config, load_balancer).await);
