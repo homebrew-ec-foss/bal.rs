@@ -75,8 +75,8 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                             
                             config.servers[index].connections -= 1;
                         }
-    
-                        if let Err(_) = response { // sends server to dead server's list if server is dead
+
+                        if response.is_err() {
                             if let Some(index) = index {
                                 let dead_server = config.servers.remove(index);
                                 config.dead_servers.push(dead_server);
@@ -106,7 +106,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
     
                         let index = config.dead_servers.iter().position(|c_dead_server| c_dead_server.addr == dead_server.addr); // get's the index of dead_server
     
-                        if let Ok(_) = response {
+                        if response.is_ok() {
                             if let Some(index) = index {
                                 let mut dead_server = config.dead_servers.remove(index);
                                 dead_server.connections = 0; // resets number of connections
@@ -242,7 +242,7 @@ where
             }
         } else {
             eprintln!("No servers available");
-            let body = format!("No servers available, please try again"); // writes the body of html file
+            let body = "No servers available, please try again".to_string(); // writes the body of html file
             let response = Response::builder()
                 .status(500)
                 .body(Full::new(Bytes::from(body)))
@@ -263,10 +263,9 @@ where
     let (server, timeout_duration) = { // updates server details and gets a local copy of server
         let mut config = config.lock().unwrap();
 
-        let index_opt = load_balancer.lock().unwrap().get_index(Arc::new(&config));
-        if index_opt == None {
-            return None;
-        }
+        let index_opt = load_balancer.lock().unwrap().get_index(&config);
+        index_opt?;
+
         let index = index_opt.unwrap();
 
         config.servers[index].connections += 1;
@@ -301,26 +300,26 @@ where
     match data {
         Ok(data) => {
             match data {
-                Ok(data) => return Some(Ok(Response::new(Full::new(data)))),
+                Ok(data) => Some(Ok(Response::new(Full::new(data)))),
                 Err(_) => { // sends server to `dead_servers` list if server is dead
-                    if let Err(_) = data {
+                    if data.is_err() {
                         if let Some(index) = index {
                             let dead_server = config.servers.remove(index);
                             config.dead_servers.push(dead_server);
                         }
                     }
-                    return None;
+                    None
                 }
-            };
+            }
         },
         Err(_) => { // sends server to `dead_servers` list if server is dead
-            if let Err(_) = data {
+            if data.is_err() {
                 if let Some(index) = index {
                     let dead_server = config.servers.remove(index);
                     config.dead_servers.push(dead_server);
                 }
             }
-            return None;
+            None
         }
     }
 }
@@ -379,5 +378,5 @@ async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Erro
 }
 
 pub trait LoadBalancer {
-    fn get_index(&mut self, config: Arc<&MutexGuard<Config>>) -> Option<usize>;
+    fn get_index(&mut self, config: &MutexGuard<Config>) -> Option<usize>;
 }

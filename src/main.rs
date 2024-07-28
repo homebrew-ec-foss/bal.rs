@@ -168,7 +168,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             io::stdout().flush().unwrap();
             io::stdin().read_line(&mut arg).unwrap();
 
-            let mut args: Vec<String> = arg.trim().split_whitespace().map(String::from).collect();
+            let mut args: Vec<String> = arg.split_whitespace().map(String::from).collect();
             args.insert(0, "Blank".to_string());
 
             cli_completed = run(args, &mut config);

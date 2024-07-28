@@ -1,5 +1,5 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, MutexGuard};
+use std::sync::MutexGuard;
 use crate::lb::LoadBalancer;
 use crate::Config;
 
@@ -26,7 +26,7 @@ impl WeightedRoundRobin {
 }
 
 impl LoadBalancer for WeightedRoundRobin {
-    fn get_index(&mut self, config: Arc<&MutexGuard<Config>>) -> Option<usize> {
+    fn get_index(&mut self, config: &MutexGuard<Config>) -> Option<usize> {
         let weights: Vec<usize> = config.servers.iter().map(|s| s.weight as usize).collect();
         let max_weight = *weights.iter().max().unwrap_or(&1);
         let gcd_weight = weights.iter().copied().reduce(Self::gcd).unwrap_or(1);
