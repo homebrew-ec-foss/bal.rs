@@ -1,4 +1,4 @@
-load balancer: http://127.0.0.1:8000
+load balancer: http://127.0.0.1:8080
 !!  load balancer address
 
 algorithm: round_robin
