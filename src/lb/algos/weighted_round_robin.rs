@@ -1,64 +1,54 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, MutexGuard};
 use crate::lb::LoadBalancer;
+use crate::Config;
 
 pub struct WeightedRoundRobin {
-    backends: Arc<Vec<(hyper::Uri, f64)>>,
-    weights: Arc<Vec<f64>>,
-    current_index: AtomicUsize,
+    counter: AtomicUsize,
     current_weight: AtomicUsize,
-    max_weight: usize,
-    gcd_weight: usize,
 }
 
 impl WeightedRoundRobin {
-    pub fn new(backends: Vec<(hyper::Uri, f64)>) -> Self {
-        let weights: Vec<f64> = backends.iter().map(|&(_, weight)| weight).collect();
-        let max_weight = (weights.iter().cloned().fold(0./0., f64::max) * 100.0) as usize;
-        let gcd_weight = Self::calculate_gcd(&weights);
-
+    pub fn new() -> Self {
         WeightedRoundRobin {
-            backends: Arc::new(backends),
-            weights: Arc::new(weights),
-            current_index: AtomicUsize::new(0),
-            current_weight: AtomicUsize::new(max_weight),
-            max_weight,
-            gcd_weight,
+            counter: AtomicUsize::new(0),
+            current_weight: AtomicUsize::new(0),
         }
     }
 
-    fn calculate_gcd(weights: &Vec<f64>) -> usize {
-        weights
-            .iter()
-            .map(|&weight| (weight * 100.0).round() as usize)
-            .fold(0, |acc, x| Self::gcd(acc, x))
-    }
-
     fn gcd(a: usize, b: usize) -> usize {
-        if b == 0 { a } else { Self::gcd(b, a % b) }
+        if b == 0 {
+            a
+        } else {
+            Self::gcd(b, a % b)
+        }
     }
 }
 
 impl LoadBalancer for WeightedRoundRobin {
-    fn get_server(&self) -> hyper::Uri {
+    fn get_index(&mut self, config: Arc<&MutexGuard<Config>>) -> Option<usize> {
+        let weights: Vec<usize> = config.servers.iter().map(|s| s.weight as usize).collect();
+        let max_weight = *weights.iter().max().unwrap_or(&1);
+        let gcd_weight = weights.iter().copied().reduce(Self::gcd).unwrap_or(1);
+        let len = config.servers.len();
+        if len == 0 {
+            return None;
+        }
+
         loop {
-            let current_index = self.current_index.load(Ordering::SeqCst);
-            let new_index = (current_index + 1) % self.backends.len();
-            self.current_index.store(new_index, Ordering::SeqCst);
-
-            if new_index == 0 {
-                let current_weight = self.current_weight.load(Ordering::SeqCst);
-                let new_weight = current_weight - self.gcd_weight;
-                self.current_weight.store(new_weight, Ordering::SeqCst);
-
-                if new_weight <= 0 {
-                    self.current_weight.store(self.max_weight, Ordering::SeqCst);
-                }
+            let index = self.counter.fetch_add(1, Ordering::SeqCst) % len;
+            if index == 0 {
+                let mut current_weight =self.current_weight.load(Ordering::SeqCst);
+                current_weight = if current_weight == 0 {
+                    max_weight
+                } else {
+                    current_weight - gcd_weight
+                };
+                self.current_weight.store(current_weight, Ordering::SeqCst);
             }
 
-            let weight = (self.weights[new_index] * 100.0).round() as usize;
-            if self.current_weight.load(Ordering::SeqCst) <= weight {
-                return self.backends[new_index].0.clone();
+            if config.servers[index].weight as usize >= self.current_weight.load(Ordering::SeqCst) {
+                return Some(index);
             }
         }
     }
