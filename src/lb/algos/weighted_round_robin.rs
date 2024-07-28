@@ -1,7 +1,7 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::MutexGuard;
 use crate::lb::LoadBalancer;
 use crate::Config;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::MutexGuard;
 
 pub struct WeightedRoundRobin {
     counter: AtomicUsize,
@@ -38,7 +38,7 @@ impl LoadBalancer for WeightedRoundRobin {
         loop {
             let index = self.counter.fetch_add(1, Ordering::SeqCst) % len;
             if index == 0 {
-                let mut current_weight =self.current_weight.load(Ordering::SeqCst);
+                let mut current_weight = self.current_weight.load(Ordering::SeqCst);
                 current_weight = if current_weight == 0 {
                     max_weight
                 } else {
