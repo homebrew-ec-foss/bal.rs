@@ -15,7 +15,7 @@ struct LoadBalancer {
     timeout: Duration,
     // max_retries: u32,
     health_check_interval: Duration,
-    dead_servers: Vec<Server>,
+    // dead_servers: Vec<Server>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -24,19 +24,19 @@ struct Server {
     weight: u32,
     response_time: Duration,
     connections: u32,
-    // max_connections: u32,
-    // alive: bool,
+    max_connections: u32,
+    alive: bool,
 }
 
 impl Server {
-    fn new(addr: hyper::Uri, weight: u32) -> Self {
+    fn new(addr: hyper::Uri, weight: u32, max_connections: u32) -> Self {
         Server {
             addr,
             weight,
-            // max_connections,
+            max_connections,
             response_time: Duration::from_secs(0),
             connections: 0,
-            // alive: true,
+            alive: true,
         }
     }
 }
@@ -50,7 +50,7 @@ impl LoadBalancer {
             timeout: Duration::from_secs(0),
             // max_retries: 0,
             health_check_interval: Duration::from_secs(0),
-            dead_servers: Vec::new(),
+            // dead_servers: Vec::new(),
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&LoadBalancer> {
@@ -60,7 +60,7 @@ impl LoadBalancer {
 
         let mut servers: Vec<hyper::Uri> = Vec::new();
         let mut weights: Vec<u32> = Vec::new();
-        // let mut max_connections: Vec<u32> = Vec::new();
+        let mut max_connections: Vec<u32> = Vec::new();
 
         for line in reader.lines() {
             let line = line?;
@@ -89,17 +89,17 @@ impl LoadBalancer {
                     .split(",")
                     .map(|weight| weight.trim().parse::<u32>().expect("Invalid weight"))
                     .collect();
-                // println!("{:?}", weights);
-
-                // } else if line.starts_with("max connections:") {
-                //     let max_connections_str = line.trim_start_matches("max connections:").trim();
-                //     max_connections = max_connections_str
-                //                             .split(",")
-                //                             .map(|max_connection| max_connection
-                //                                     .trim()
-                //                                     .parse::<u32>()
-                //                                     .expect("Invalid max connection"))
-                //                             .collect();
+            } else if line.starts_with("max connections:") {
+                let max_connections_str = line.trim_start_matches("max connections:").trim();
+                max_connections = max_connections_str
+                    .split(",")
+                    .map(|max_connection| {
+                        max_connection
+                            .trim()
+                            .parse::<u32>()
+                            .expect("Invalid max connection")
+                    })
+                    .collect();
             } else if line.starts_with("timeout:") {
                 let timeout = line.trim_start_matches("timeout:").trim();
                 self.timeout =
@@ -121,8 +121,11 @@ impl LoadBalancer {
 
         for i in 0..servers.len() {
             // self.servers.push(Server::new(servers[i].clone(), weights[i], max_connections[i]));
-            self.servers
-                .push(Server::new(servers[i].clone(), weights[i]));
+            self.servers.push(Server::new(
+                servers[i].clone(),
+                weights[i],
+                max_connections[i],
+            ));
         }
 
         Ok(self)

@@ -1,6 +1,5 @@
 use crate::lb::Loadbalancer;
-use crate::LoadBalancer;
-use std::sync::MutexGuard;
+use crate::Server;
 
 pub struct LeastConnections {}
 
@@ -11,9 +10,8 @@ impl LeastConnections {
 }
 
 impl Loadbalancer for LeastConnections {
-    fn get_index(&mut self, lb: &MutexGuard<LoadBalancer>) -> Option<usize> {
-        let min_index = lb
-            .servers
+    fn get_index(&mut self, servers: Vec<&Server>) -> Option<usize> {
+        let min_index = servers
             .iter()
             .enumerate()
             .min_by_key(|(_, server)| server.connections)

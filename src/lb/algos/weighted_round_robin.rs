@@ -1,7 +1,6 @@
 use crate::lb::Loadbalancer;
-use crate::LoadBalancer;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::MutexGuard;
+use crate::Server;
 
 pub struct WeightedRoundRobin {
     counter: AtomicUsize,
@@ -26,11 +25,11 @@ impl WeightedRoundRobin {
 }
 
 impl Loadbalancer for WeightedRoundRobin {
-    fn get_index(&mut self, lb: &MutexGuard<LoadBalancer>) -> Option<usize> {
-        let weights: Vec<usize> = lb.servers.iter().map(|s| s.weight as usize).collect();
+    fn get_index(&mut self, servers: Vec<&Server>) -> Option<usize> {
+        let weights: Vec<usize> = servers.iter().map(|s| s.weight as usize).collect();
         let max_weight = *weights.iter().max().unwrap_or(&1);
         let gcd_weight = weights.iter().copied().reduce(Self::gcd).unwrap_or(1);
-        let len = lb.servers.len();
+        let len = servers.len();
         if len == 0 {
             return None;
         }
@@ -47,7 +46,7 @@ impl Loadbalancer for WeightedRoundRobin {
                 self.current_weight.store(current_weight, Ordering::SeqCst);
             }
 
-            if lb.servers[index].weight as usize >= self.current_weight.load(Ordering::SeqCst) {
+            if servers[index].weight as usize >= self.current_weight.load(Ordering::SeqCst) {
                 return Some(index);
             }
         }

@@ -1,6 +1,5 @@
 use crate::lb::Loadbalancer;
-use crate::LoadBalancer;
-use std::sync::MutexGuard;
+use crate::Server;
 
 pub struct WeightedLeastConnections {}
 
@@ -11,9 +10,8 @@ impl WeightedLeastConnections {
 }
 
 impl Loadbalancer for WeightedLeastConnections {
-    fn get_index(&mut self, lb: &MutexGuard<LoadBalancer>) -> Option<usize> {
-        let min_index = lb
-            .servers
+    fn get_index(&mut self, servers: Vec<&Server>) -> Option<usize> {
+        let min_index = servers
             .iter()
             .enumerate()
             .min_by_key(|(_, server)| server.connections / server.weight)

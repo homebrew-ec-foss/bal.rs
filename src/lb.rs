@@ -1,6 +1,6 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
@@ -12,7 +12,7 @@ use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
 
-use crate::{Algorithm, LoadBalancer};
+use crate::{Algorithm, LoadBalancer, Server};
 mod algos;
 use algos::least_connections::LeastConnections;
 use algos::least_response_time::LeastResponseTime;
@@ -66,78 +66,35 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                             server.connections += 1;
                         }
 
-                        lb.servers.get(index).cloned()
+                        lb.servers[index].clone()
                     };
 
-                    if let Some(server) = server {
-                        // checks if server exists
-                        let start = Instant::now();
-                        let response = timeout(
-                            timeout_duration,
-                            reqwest::get(server.addr.clone().to_string()),
-                        )
-                        .await; // sends a request to server
-                        let duration = start.elapsed(); // get's the response time
+                    let start = Instant::now();
+                    let response = timeout(
+                        timeout_duration,
+                        reqwest::get(server.addr.clone().to_string()),
+                    )
+                    .await; // sends a request to server
+                    let duration = start.elapsed(); // get's the response time
 
-                        let mut lb = lb_clone.lock().unwrap();
+                    let mut lb = lb_clone.lock().unwrap();
+                    
+                    lb.servers[index].response_time = duration;
 
-                        let index = lb
-                            .servers
-                            .iter()
-                            .position(|c_server| c_server.addr == server.addr); // get's the index of server
+                    lb.servers[index].connections -= 1;
 
-                        if let Some(index) = index {
-                            // updates server data
-                            lb.servers[index].response_time = duration;
-
-                            lb.servers[index].connections -= 1;
-                        }
-
-                        if response.is_err() {
-                            if let Some(index) = index {
-                                let dead_server = lb.servers.remove(index);
-                                lb.dead_servers.push(dead_server);
+                    match response {
+                        Ok(response) => {
+                            if response.is_err() || lb.servers[index].connections >= lb.servers[index].max_connections {
+                                lb.servers[index].connections = 0;
+                                lb.servers[index].alive = false;
+                            } else {
+                                lb.servers[index].alive = true;
                             }
-                        }
-                    }
-                });
-                tasks.push(task);
-            }
-
-            for index in 0..len {
-                let lb_clone: Arc<Mutex<LoadBalancer>> = Arc::clone(&lb_clone);
-
-                let task = tokio::task::spawn(async move {
-                    let dead_server = {
-                        // gets a local copy of daed servers
-                        let lb = lb_clone.lock().unwrap();
-
-                        lb.dead_servers.get(index).cloned()
-                    };
-
-                    if let Some(dead_server) = dead_server {
-                        let start = Instant::now();
-                        let response = timeout(
-                            timeout_duration,
-                            reqwest::get(dead_server.addr.clone().to_string()),
-                        )
-                        .await; // sends a request to server
-                        let duration = start.elapsed(); // get's the response time
-
-                        let mut lb = lb_clone.lock().unwrap();
-
-                        let index = lb
-                            .dead_servers
-                            .iter()
-                            .position(|c_dead_server| c_dead_server.addr == dead_server.addr); // get's the index of dead_server
-
-                        if response.is_ok() {
-                            if let Some(index) = index {
-                                let mut dead_server = lb.dead_servers.remove(index);
-                                dead_server.connections = 0; // resets number of connections
-                                dead_server.response_time = duration; // updates response time
-                                lb.servers.push(dead_server); // sends dead server to `servers` vector
-                            }
+                        },
+                        Err(_) => {
+                            lb.servers[index].connections = 0;
+                            lb.servers[index].alive = false;
                         }
                     }
                 });
@@ -251,7 +208,7 @@ where
     T: Loadbalancer,
 {
     loop {
-        let len = lb.lock().unwrap().servers.len();
+        let len = lb.lock().unwrap().servers.iter().filter(|server| server.alive && server.connections < server.max_connections).collect::<Vec<&Server>>().len();
         if len > 0 {
             match get_request(
                 Arc::clone(&req),
@@ -287,17 +244,17 @@ async fn get_request<T>(
 where
     T: Loadbalancer,
 {
-    let (server, timeout_duration) = {
+    let (server, timeout_duration, index) = {
         // updates server details and gets a local copy of server
         let mut lb = lb.lock().unwrap();
 
-        let index_opt = load_balancer.lock().unwrap().get_index(&lb);
+        let index_opt = load_balancer.lock().unwrap().get_index(lb.servers.iter().filter(|server| server.alive && server.connections < server.max_connections).collect());
         index_opt?;
 
         let index = index_opt.unwrap();
 
         lb.servers[index].connections += 1;
-        (lb.servers[index].clone(), lb.timeout)
+        (lb.servers[index].clone(), lb.timeout, index)
     };
 
     let request = match &*req {
@@ -319,18 +276,10 @@ where
     let duration = start.elapsed(); // gets response time
 
     let mut lb = lb.lock().unwrap();
+    
+    lb.servers[index].response_time = duration;
 
-    let index = lb
-        .servers
-        .iter()
-        .position(|c_server| c_server.addr == server.addr); // gets index of server
-
-    if let Some(index) = index {
-        // updates server details
-        lb.servers[index].response_time = duration;
-
-        lb.servers[index].connections -= 1;
-    }
+    lb.servers[index].connections -= 1;
 
     match data {
         Ok(data) => {
@@ -338,12 +287,8 @@ where
                 Ok(data) => Some(Ok(Response::new(Full::new(data)))),
                 Err(_) => {
                     // sends server to `dead_servers` list if server is dead
-                    if data.is_err() {
-                        if let Some(index) = index {
-                            let dead_server = lb.servers.remove(index);
-                            lb.dead_servers.push(dead_server);
-                        }
-                    }
+                    lb.servers[index].connections = 0;
+                    lb.servers[index].alive = false;
                     None
                 }
             }
@@ -351,10 +296,8 @@ where
         Err(_) => {
             // sends server to `dead_servers` list if server is dead
             if data.is_err() {
-                if let Some(index) = index {
-                    let dead_server = lb.servers.remove(index);
-                    lb.dead_servers.push(dead_server);
-                }
+                lb.servers[index].connections = 0;
+                lb.servers[index].alive = false;
             }
             None
         }
@@ -415,5 +358,5 @@ async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Erro
 }
 
 pub trait Loadbalancer {
-    fn get_index(&mut self, lb: &MutexGuard<LoadBalancer>) -> Option<usize>;
+    fn get_index(&mut self, lb: Vec<&Server>) -> Option<usize>;
 }
