@@ -7,7 +7,7 @@ algorithm: round_robin
 servers: http://127.0.0.1:3001, http://127.0.0.1:3002, http://127.0.0.1:3003
 !!  server address
 
-weights: 20, 30, 10, 40
+weights: 20, 30, 10
 !!  server weights
 
 max connections: 1000, 1000, 1000, 1000

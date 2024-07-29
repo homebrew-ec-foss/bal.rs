@@ -1,27 +1,28 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard};    
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper::{body::Bytes, Request, Uri, Response};
+use hyper::{body::Bytes, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
 use std::str::FromStr;
 use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{timeout, sleep};
+use tokio::time::{sleep, timeout};
 
 use crate::{Algorithm, Config};
 mod algos;
-use algos::round_robin::RoundRobin;
-use algos::weighted_round_robin::WeightedRoundRobin;
-use algos::least_response_time::LeastResponseTime;
-use algos::weighted_least_response_time::WeightedLeastResponseTime;
 use algos::least_connections::LeastConnections;
+use algos::least_response_time::LeastResponseTime;
+use algos::round_robin::RoundRobin;
 use algos::weighted_least_connections::WeightedLeastConnections;
+use algos::weighted_least_response_time::WeightedLeastResponseTime;
+use algos::weighted_round_robin::WeightedRoundRobin;
 
-fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes Uri and returns SocketAddr
+fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
+    // takes Uri and returns SocketAddr
     let authority = uri
         .authority()
         .ok_or("URI does not have an authority part")?; // Ensure the URI has an authority part (host and port)
@@ -34,12 +35,18 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes 
 }
 
 #[tokio::main]
-pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> { // starts the load balancer
+pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // starts the load balancer
     let config = Arc::new(Mutex::new(config));
 
-    let (health_check_interval, len, timeout_duration) = { // gets health check interval and number of servers
+    let (health_check_interval, len, timeout_duration) = {
+        // gets health check interval and number of servers
         let config_lock = config.lock().unwrap();
-        (config_lock.health_check_interval, config_lock.servers.len(), config_lock.timeout)
+        (
+            config_lock.health_check_interval,
+            config_lock.servers.len(),
+            config_lock.timeout,
+        )
     };
     let config_clone = Arc::clone(&config); //creates a clone for health checker
 
@@ -51,32 +58,43 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                 let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
 
                 let task = tokio::task::spawn(async move {
-                    let server = { // gets a local copy of server
+                    let server = {
+                        // gets a local copy of server
                         let mut config = config_clone.lock().unwrap();
-    
+
                         if let Some(server) = config.servers.get_mut(index) {
                             server.connections += 1;
                         }
 
                         config.servers.get(index).cloned()
                     };
-                    
-                    if let Some(server) = server { // checks if server exists
+
+                    if let Some(server) = server {
+                        // checks if server exists
                         let start = Instant::now();
-                        let response = timeout(timeout_duration, reqwest::get(server.addr.clone().to_string())).await; // sends a request to server
+                        let response = timeout(
+                            timeout_duration,
+                            reqwest::get(server.addr.clone().to_string()),
+                        )
+                        .await; // sends a request to server
                         let duration = start.elapsed(); // get's the response time
-    
+
                         let mut config = config_clone.lock().unwrap();
-    
-                        let index = config.servers.iter().position(|c_server| c_server.addr == server.addr); // get's the index of server
-                        
-                        if let Some(index) = index { // updates server data
+
+                        let index = config
+                            .servers
+                            .iter()
+                            .position(|c_server| c_server.addr == server.addr); // get's the index of server
+
+                        if let Some(index) = index {
+                            // updates server data
                             config.servers[index].response_time = duration;
-                            
+
                             config.servers[index].connections -= 1;
                         }
-    
-                        if let Err(_) = response { // sends server to dead server's list if server is dead
+
+                        if let Err(_) = response {
+                            // sends server to dead server's list if server is dead
                             if let Some(index) = index {
                                 let dead_server = config.servers.remove(index);
                                 config.dead_servers.push(dead_server);
@@ -89,23 +107,31 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
 
             for index in 0..len {
                 let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
-                
+
                 let task = tokio::task::spawn(async move {
-                    let dead_server = { // gets a local copy of daed servers
+                    let dead_server = {
+                        // gets a local copy of daed servers
                         let config = config_clone.lock().unwrap();
-    
+
                         config.dead_servers.get(index).cloned()
                     };
-                    
+
                     if let Some(dead_server) = dead_server {
                         let start = Instant::now();
-                        let response = timeout(timeout_duration, reqwest::get(dead_server.addr.clone().to_string())).await; // sends a request to server
+                        let response = timeout(
+                            timeout_duration,
+                            reqwest::get(dead_server.addr.clone().to_string()),
+                        )
+                        .await; // sends a request to server
                         let duration = start.elapsed(); // get's the response time
-    
+
                         let mut config = config_clone.lock().unwrap();
-    
-                        let index = config.dead_servers.iter().position(|c_dead_server| c_dead_server.addr == dead_server.addr); // get's the index of dead_server
-    
+
+                        let index = config
+                            .dead_servers
+                            .iter()
+                            .position(|c_dead_server| c_dead_server.addr == dead_server.addr); // get's the index of dead_server
+
                         if let Ok(_) = response {
                             if let Some(index) = index {
                                 let mut dead_server = config.dead_servers.remove(index);
@@ -133,7 +159,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
         let config_lock = config.lock().unwrap();
         config_lock.algo.clone()
     };
-    
+
     match algo {
         Algorithm::RoundRobin => {
             let load_balancer = Arc::new(Mutex::new(RoundRobin::new()));
@@ -172,11 +198,12 @@ where
     T: LoadBalancer + Send + 'static,
 {
     let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
-    let listener = match TcpListener::bind(addr).await { // We create a TcpListener and bind it to load balancer address
+    let listener = match TcpListener::bind(addr).await {
+        // We create a TcpListener and bind it to load balancer address
         Ok(listener) => {
             println!("load balancer is running on http://{}", addr);
             listener
-        },
+        }
         Err(err) => {
             eprintln!("{}", err);
             return Ok(());
@@ -195,7 +222,8 @@ where
         let load_balancer_clone = Arc::clone(&load_balancer);
 
         // !!!!!!!!!! idk smtg virtual thread thing should go down here
-        tokio::task::spawn(async move { // spawns a tokio task to server multiple connections concurrently
+        tokio::task::spawn(async move {
+            // spawns a tokio task to server multiple connections concurrently
             if let Err(err) = http1::Builder::new()
                 .serve_connection(
                     io,
@@ -203,7 +231,7 @@ where
                         handle_request(
                             Arc::new(Some(req)),
                             Arc::clone(&config_clone),
-                            Arc::clone(&load_balancer_clone),   
+                            Arc::clone(&load_balancer_clone),
                         )
                     }),
                 )
@@ -260,7 +288,8 @@ async fn get_request<T>(
 where
     T: LoadBalancer,
 {
-    let (server, timeout_duration) = { // updates server details and gets a local copy of server
+    let (server, timeout_duration) = {
+        // updates server details and gets a local copy of server
         let mut config = config.lock().unwrap();
 
         let index_opt = load_balancer.lock().unwrap().get_index(Arc::new(&config));
@@ -273,9 +302,12 @@ where
         (config.servers[index].clone(), config.timeout)
     };
 
-    
     let request = match &*req {
-        Some(req) => format!("{}{}", server.addr.clone(), req.uri().to_string().trim_start_matches("/")),
+        Some(req) => format!(
+            "{}{}",
+            server.addr.clone(),
+            req.uri().to_string().trim_start_matches("/")
+        ),
         None => server.addr.to_string(),
     }; // updates the address
 
@@ -284,17 +316,21 @@ where
     let start = Instant::now();
 
     let data = timeout(timeout_duration, send_request(request)).await; // sends request to the address
-    // println!("{:?}", data);
+                                                                       // println!("{:?}", data);
 
     let duration = start.elapsed(); // gets response time
 
     let mut config = config.lock().unwrap();
 
-    let index = config.servers.iter().position(|c_server| c_server.addr == server.addr); // gets index of server
-        
-    if let Some(index) = index { // updates server details
+    let index = config
+        .servers
+        .iter()
+        .position(|c_server| c_server.addr == server.addr); // gets index of server
+
+    if let Some(index) = index {
+        // updates server details
         config.servers[index].response_time = duration;
-        
+
         config.servers[index].connections -= 1;
     }
 
@@ -302,7 +338,8 @@ where
         Ok(data) => {
             match data {
                 Ok(data) => return Some(Ok(Response::new(Full::new(data)))),
-                Err(_) => { // sends server to `dead_servers` list if server is dead
+                Err(_) => {
+                    // sends server to `dead_servers` list if server is dead
                     if let Err(_) = data {
                         if let Some(index) = index {
                             let dead_server = config.servers.remove(index);
@@ -312,8 +349,9 @@ where
                     return None;
                 }
             };
-        },
-        Err(_) => { // sends server to `dead_servers` list if server is dead
+        }
+        Err(_) => {
+            // sends server to `dead_servers` list if server is dead
             if let Err(_) = data {
                 if let Some(index) = index {
                     let dead_server = config.servers.remove(index);

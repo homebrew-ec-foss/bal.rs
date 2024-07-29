@@ -14,7 +14,6 @@ impl RoundRobin {
             counter: AtomicUsize::new(0),
         }
     }
-    
 }
 
 impl LoadBalancer for RoundRobin {
@@ -22,4 +21,4 @@ impl LoadBalancer for RoundRobin {
         let index = self.counter.fetch_add(1, Ordering::SeqCst) % config.servers.len();
         Some(index)
     }
-}   
+}
