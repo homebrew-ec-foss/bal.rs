@@ -110,7 +110,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
 
                 let task = tokio::task::spawn(async move {
                     let dead_server = {
-                        // gets a local copy of daed servers
+                        // gets a local copy of dead servers
                         let config = config_clone.lock().unwrap();
 
                         config.dead_servers.get(index).cloned()
@@ -149,7 +149,7 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                 drop(task.await); // waits for all the servers to get updated
             }
 
-            println!("updated config | health checker");
+            println!("Updated config | Health checker");
 
             sleep(health_check_interval).await;
         }

@@ -14,7 +14,7 @@ struct Config {
     algo: Algorithm,
     servers: Vec<Server>,
     timeout: Duration,
-    max_retries: u32,
+    //max_retries: u32,
     health_check_interval: Duration,
     dead_servers: Vec<Server>,
 }
@@ -47,7 +47,7 @@ impl Config {
             algo: Algorithm::RoundRobin, // using round robin as default algorithm
             servers: Vec::new(),
             timeout: Duration::from_secs(0),
-            max_retries: 0,
+            //max_retries: 0,
             health_check_interval: Duration::from_secs(0),
             dead_servers: Vec::new(),
         }
@@ -116,9 +116,9 @@ impl Config {
                 let timeout = line.trim_start_matches("timeout:").trim();
                 self.timeout =
                     Duration::from_secs(timeout.parse::<u64>().expect("Invalid timeout"));
-            } else if line.starts_with("max retries:") {
-                let max_retries = line.trim_start_matches("max retries:").trim();
-                self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
+            // } else if line.starts_with("max retries:") {
+            //     let max_retries = line.trim_start_matches("max retries:").trim();
+            //     self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
             } else if line.starts_with("health check interval:") {
                 let health_check_interval =
                     line.trim_start_matches("health check interval:").trim();
