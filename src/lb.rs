@@ -1,10 +1,8 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::ops::Index;
 use std::sync::{Arc, Mutex};
 
 use http_body_util::{BodyExt, Empty, Full};
-use hyper::server;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Bytes, Request, Response, Uri};
