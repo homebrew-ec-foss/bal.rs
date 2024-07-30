@@ -10,7 +10,7 @@ impl LeastResponseTime {
 }
 
 impl Loadbalancer for LeastResponseTime {
-    fn get_index(&mut self, servers: Vec<&Server>) -> Option<usize> {
+    fn get_index(&mut self, servers: &Vec<&Server>) -> Option<usize> {
         let min_index = servers
             .iter()
             .enumerate()

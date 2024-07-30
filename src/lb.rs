@@ -1,8 +1,10 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
+use std::ops::Index;
 use std::sync::{Arc, Mutex};
 
 use http_body_util::{BodyExt, Empty, Full};
+use hyper::server;
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
 use hyper::{body::Bytes, Request, Response, Uri};
@@ -248,7 +250,14 @@ where
         // updates server details and gets a local copy of server
         let mut lb = lb.lock().unwrap();
 
-        let index_opt = load_balancer.lock().unwrap().get_index(lb.servers.iter().filter(|server| server.alive && server.connections < server.max_connections).collect());
+        let servers_alive = lb.servers.iter().filter(|server| server.alive && server.connections < server.max_connections).collect();
+        let index_opt = load_balancer.lock().unwrap().get_index(&servers_alive);
+        index_opt?;
+
+        let index = index_opt.unwrap();
+        let server = servers_alive[index].clone();
+
+        let index_opt = lb.servers.iter().position(|c_server| c_server.addr == server.addr); // get's the index of dead_server
         index_opt?;
 
         let index = index_opt.unwrap();
@@ -358,5 +367,5 @@ async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Erro
 }
 
 pub trait Loadbalancer {
-    fn get_index(&mut self, lb: Vec<&Server>) -> Option<usize>;
+    fn get_index(&mut self, lb: &Vec<&Server>) -> Option<usize>;
 }
