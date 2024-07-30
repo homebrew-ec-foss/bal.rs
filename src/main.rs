@@ -1,4 +1,4 @@
-use clap::{command, Arg, ArgAction, Command};
+use clap::{command, Arg, Command};
 use std::env;
 use std::error::Error;
 use std::fs::File;
@@ -9,14 +9,12 @@ use std::time::Duration;
 mod lb;
 
 #[derive(Debug)]
-struct Config {
+struct LoadBalancer {
     load_balancer: hyper::Uri,
     algo: Algorithm,
     servers: Vec<Server>,
     timeout: Duration,
-    max_retries: u32,
     health_check_interval: Duration,
-    dead_servers: Vec<Server>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,6 +24,7 @@ struct Server {
     response_time: Duration,
     connections: u32,
     max_connections: u32,
+    alive: bool,
 }
 
 impl Server {
@@ -36,23 +35,22 @@ impl Server {
             max_connections,
             response_time: Duration::from_secs(0),
             connections: 0,
+            alive: true,
         }
     }
 }
 
-impl Config {
+impl LoadBalancer {
     fn new() -> Self {
-        Config {
+        LoadBalancer {
             load_balancer: "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer
             algo: Algorithm::RoundRobin, // using round robin as default algorithm
             servers: Vec::new(),
             timeout: Duration::from_secs(0),
-            max_retries: 0,
             health_check_interval: Duration::from_secs(0),
-            dead_servers: Vec::new(),
         }
     }
-    fn update(&mut self, path: &str) -> io::Result<&Config> {
+    fn update(&mut self, path: &str) -> io::Result<&LoadBalancer> {
         let path = Path::new(path);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -68,12 +66,10 @@ impl Config {
                     .trim_start_matches("load balancer:")
                     .trim()
                     .parse::<hyper::Uri>();
-
                 let load_balancer = match load_balancer {
                     Ok(load_balancer) => load_balancer,
-                    Err(_) => "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
+                    Err(_) => "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), // default address for load balancer
                 };
-
                 self.load_balancer = load_balancer;
             } else if line.starts_with("algorithm:") {
                 let algo = line.trim_start_matches("algorithm:").trim();
@@ -81,20 +77,19 @@ impl Config {
             } else if line.starts_with("servers:") {
                 let servers_str = line.trim_start_matches("servers:").trim();
                 servers = servers_str
-                    .split(',')
+                    .split(",")
                     .map(|server| server.trim().parse::<hyper::Uri>().expect("Invalid URI"))
                     .collect();
             } else if line.starts_with("weights:") {
                 let weights_str = line.trim_start_matches("weights:").trim();
                 weights = weights_str
-                    .split(',')
+                    .split(",")
                     .map(|weight| weight.trim().parse::<u32>().expect("Invalid weight"))
                     .collect();
-                // println!("{:?}", weights);
             } else if line.starts_with("max connections:") {
                 let max_connections_str = line.trim_start_matches("max connections:").trim();
                 max_connections = max_connections_str
-                    .split(',')
+                    .split(",")
                     .map(|max_connection| {
                         max_connection
                             .trim()
@@ -106,16 +101,13 @@ impl Config {
                 let timeout = line.trim_start_matches("timeout:").trim();
                 self.timeout =
                     Duration::from_secs(timeout.parse::<u64>().expect("Invalid timeout"));
-            } else if line.starts_with("max retries:") {
-                let max_retries = line.trim_start_matches("max retries:").trim();
-                self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
             } else if line.starts_with("health check interval:") {
                 let health_check_interval =
                     line.trim_start_matches("health check interval:").trim();
                 self.health_check_interval = Duration::from_secs(
                     health_check_interval
                         .parse::<u64>()
-                        .expect("Invalid helth check interval"),
+                        .expect("Invalid health check interval"),
                 );
             }
         }
@@ -127,28 +119,6 @@ impl Config {
                 max_connections[i],
             ));
         }
-
-        Ok(self)
-    }
-    fn update_lb(&mut self, addr: Option<&String>, algo: Option<&String>) -> io::Result<&Config> {
-        let load_balancer = match addr {
-            Some(addr) => addr.parse::<hyper::Uri>(),
-            None => Ok("http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap()),
-        };
-
-        let load_balancer = match load_balancer {
-            Ok(load_balancer) => load_balancer,
-            Err(_) => "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
-        };
-
-        self.load_balancer = load_balancer;
-
-        let algorithm = match algo {
-            Some(algo) => algo,
-            None => &"round_robin".to_string(),
-        };
-
-        self.algo = get_algo(algorithm.as_str());
 
         Ok(self)
     }
@@ -165,9 +135,13 @@ enum Algorithm {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut config = Config::new();
-    config.update("config.yaml")?;
+    let mut lb = LoadBalancer::new();
+    lb.update("config.yaml")?;
 
+    cli(lb)
+}
+
+fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
     let res = command!()
         .about(
             r#"
@@ -193,51 +167,39 @@ fn main() -> Result<(), Box<dyn Error>> {
                     Arg::new("algorithm")
                         .short('a')
                         .long("algorithm")
-                        .default_value("round_robin")
-                        .help(
-                            "Starts load balancer with specified algorithm
-Available algorithms: round_robin, weighted_round_robin",
-                        ),
-                ),
-        )
-        .subcommand(Command::new("stop").about("Stop the load balancer"))
-        .arg(
-            Arg::new("path")
-                .long("path")
-                .default_value("config.yaml")
-                .help("Specify path to config file"),
-        )
-        .arg(
-            Arg::new("server-count")
-                .short('s')
-                .long("server-count")
-                .help("Shows number of listed servers")
-                .action(ArgAction::SetTrue),
+                        .help("Starts load balancer with specified algorithm. Available algorithms: round_robin, weighted_round_robin",),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .default_value("config.yaml")
+                        .help("Specify path to config file"),
+                )
         )
         .get_matches();
-
-    if *res.get_one::<bool>("server-count").unwrap() {
-        println!("{} servers listed", config.servers.len());
-
-        return Ok(());
-    }
 
     match res.subcommand_name() {
         Some("start") => {
             println!("Starting load balancer");
-            let path = res.get_one::<String>("path").unwrap();
             let start_args = res.subcommand_matches("start").unwrap();
+            let path = start_args.get_one::<String>("path");
             let address = start_args.get_one::<String>("address");
             let algorithm = start_args.get_one::<String>("algorithm");
 
-            config.update(path)?;
-            config.update_lb(address, algorithm)?;
-            drop(lb::start_lb(config));
+            if let Some(path) = path {
+                lb.update(path).unwrap();
+            }
+
+            if let Some(address) = address {
+                lb.load_balancer = address.trim().parse::<hyper::Uri>().unwrap();
+            }
+
+            if let Some(algorithm) = algorithm {
+                lb.algo = get_algo(algorithm);
+            }
+
+            drop(lb::start_lb(lb));
         }
-        // Some("stop") => {
-        //     println!("Stopping load balancer");
-        //     drop(lb::stop_lb(config));
-        // },
         _ => println!("Invalid command"),
     }
 

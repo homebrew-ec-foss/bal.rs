@@ -1,4 +1,5 @@
-use crate::lb::LoadBalancer;
+use crate::lb::Loadbalancer;
+use crate::Server;
 
 pub struct LeastConnections {}
 
@@ -8,19 +9,13 @@ impl LeastConnections {
     }
 }
 
-impl LoadBalancer for LeastConnections {
-    fn get_index(
-        &mut self,
-        config: std::sync::Arc<&std::sync::MutexGuard<crate::Config>>,
-    ) -> Option<usize> {
-        let min_index = config
-            .servers
+impl Loadbalancer for LeastConnections {
+    fn get_index(&mut self, servers: &[&Server]) -> Option<usize> {
+        let min_index = servers
             .iter()
             .enumerate()
-            .min_by_key(|(_, server)| server.connections);
-        match min_index {
-            Some((index, _)) => Some(index),
-            None => None,
-        }
+            .min_by_key(|(_, server)| server.connections)
+            .map(|(index, _)| index);
+        min_index
     }
 }
