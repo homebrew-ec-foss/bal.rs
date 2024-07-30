@@ -10,3 +10,4 @@ http-body-util = "0.1"
 hyper-util = { version = "0.1", features = ["full"] }
 whoami = "1.5.0"
 reqwest = "0.12"
+clap = { version = "4.5", features = ["cargo"] }

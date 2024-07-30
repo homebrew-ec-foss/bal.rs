@@ -1,9 +1,10 @@
 use std::error::Error;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::time::Duration;
-use std::{env, process};
+use std::env;
+use clap::{command, Arg, Command};
 
 mod lb;
 
@@ -143,42 +144,73 @@ enum Algorithm {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let mut config = LoadBalancer::new();
-    config.update("config.yaml")?;
+    let mut lb = LoadBalancer::new();
+    lb.update("config.yaml")?;
 
-    let args: Vec<String> = env::args().collect();
+    cli(lb)
+}
 
-    if args.len() > 1 {
-        match run(args, &mut config) {
-            true => drop(lb::start_lb(config)),
-            false => process::exit(0),
+fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
+    let res = command!()
+        .about(
+            r#"
+    ________  ___  ________  ________  ___  ___  ________      
+    |\   ____\|\  \|\   __  \|\   ____\|\  \|\  \|\   ____\     
+    \ \  \___|\ \  \ \  \|\  \ \  \___|\ \  \\\  \ \  \___|_    
+    \ \  \    \ \  \ \   _  _\ \  \    \ \  \\\  \ \_____  \   
+    \ \  \____\ \  \ \  \\  \\ \  \____\ \  \\\  \|____|\  \  
+    \ \_______\ \__\ \__\\ _\\ \_______\ \_______\____\_\  \ 
+    \|_______|\|__|\|__|\|__|\|_______|\|_______|\_________\
+    "#,
+        )
+        .subcommand(
+            Command::new("start")
+                .about("Start the load balancer")
+                .arg(
+                    Arg::new("address")
+                        .short('u')
+                        .long("address")
+                        .help("Starts load balancer at specified address"),
+                )
+                .arg(
+                    Arg::new("algorithm")
+                        .short('a')
+                        .long("algorithm")
+                        // .default_value("round_robin")
+                        .help("Starts load balancer with specified algorithm. Available algorithms: round_robin, weighted_round_robin",),
+                )
+                .arg(
+                    Arg::new("path")
+                        .long("path")
+                        .default_value("config.yaml")
+                        .help("Specify path to config file"),
+                )
+        )
+        .get_matches();
+
+    match res.subcommand_name() {
+        Some("start") => {
+            println!("Starting load balancer");
+            let start_args = res.subcommand_matches("start").unwrap();
+            let path = start_args.get_one::<String>("path");
+            let address = start_args.get_one::<String>("address");
+            let algorithm = start_args.get_one::<String>("algorithm");
+
+            if let Some(path) = path {
+                lb.update(path).unwrap();
+            }
+
+            if let Some(address) = address {
+                lb.load_balancer = address.trim().parse::<hyper::Uri>().unwrap();
+            }
+
+            if let Some(algorithm) = algorithm {
+                lb.algo = get_algo(algorithm);
+            }
+
+            drop(lb::start_lb(lb));
         }
-    } else {
-        println!(r#" ________  ___  ________  ________  ___  ___  ________      "#);
-        println!(r#"|\   ____\|\  \|\   __  \|\   ____\|\  \|\  \|\   ____\     "#);
-        println!(r#"\ \  \___|\ \  \ \  \|\  \ \  \___|\ \  \\\  \ \  \___|_    "#);
-        println!(r#" \ \  \    \ \  \ \   _  _\ \  \    \ \  \\\  \ \_____  \   "#);
-        println!(r#"  \ \  \____\ \  \ \  \\  \\ \  \____\ \  \\\  \|____|\  \  "#);
-        println!(r#"   \ \_______\ \__\ \__\\ _\\ \_______\ \_______\____\_\  \ "#);
-        println!(r#"    \|_______|\|__|\|__|\|__|\|_______|\|_______|\_________\"#);
-        println!("Type h or ? for a list of available commands");
-
-        let usn = whoami::username() + &String::from("@circus");
-
-        let mut cli_completed = false;
-        while !cli_completed {
-            let mut arg = String::new();
-
-            print!("{usn}:> ");
-            io::stdout().flush().unwrap();
-            io::stdin().read_line(&mut arg).unwrap();
-
-            let mut args: Vec<String> = arg.split_whitespace().map(String::from).collect();
-            args.insert(0, "Blank".to_string());
-
-            cli_completed = run(args, &mut config);
-        }
-        drop(lb::start_lb(config));
+        _ => println!("Invalid command"),
     }
 
     Ok(())
@@ -194,55 +226,4 @@ fn get_algo(algo: &str) -> Algorithm {
         "weighted_least_response_time" => Algorithm::WeightedLeastResponseTime,
         _ => Algorithm::RoundRobin, // Default algorithms
     }
-}
-
-fn run(args: Vec<String>, config: &mut LoadBalancer) -> bool {
-    match args[1].as_str() {
-        "h" | "?" => {
-            help();
-            false
-        }
-        "start" => true,
-        //"stop" => lb::stop_lb(config).unwrap(), //Implement later
-        "p" => {
-            let _p: u32 = match args[2].trim().parse() {
-                Ok(prt) => prt,
-                Err(e) => {
-                    println!("Invalid argument passed as port number: {:?}", e);
-                    return false;
-                }
-            };
-            //lb::change_port(p); //Implement later
-            false
-        }
-        "a" => {
-            let _a = get_algo(args[2].trim()); //Fully implement later
-            config.algo = _a;
-
-            false
-        }
-        "s" => {
-            println!("{} servers available", config.servers.len());
-
-            false
-        }
-        "q" => {
-            println!("Exiting..");
-            process::exit(0);
-        }
-        _ => {
-            println!("Unknown argument passed");
-            false
-        }
-    }
-}
-
-fn help() {
-    println!("h or ? -> Displays this list of available commands");
-    println!("q -> Quit program. Applicable only when program is run with no arguments");
-    println!("start -> Starts the load balancer");
-    //println!("stop -> Stops the load balancer");
-    println!("p <port_number> -> Changes load balancer port to specified port. Takes one more argument as port number");
-    println!("a <algorithm> -> Changes load balancer algorithm to specified algorithm. Takes one more argument as algorithm name");
-    println!("s -> Shows number of available servers");
 }
