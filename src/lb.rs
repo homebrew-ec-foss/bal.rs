@@ -110,8 +110,17 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
 
             let lb_clone2: Arc<Mutex<LoadBalancer>> = Arc::clone(&lb_clone);
             println!("Updated load balancer | Health checker");
-            for i in lb_clone2.lock().unwrap().servers.iter().filter(|server| server.alive && server.connections < server.max_connections) {
-                println!("{} | active connections: {} | response time: {:?}", i.addr, i.connections, i.response_time);
+            for i in lb_clone2
+                .lock()
+                .unwrap()
+                .servers
+                .iter()
+                .filter(|server| server.alive && server.connections < server.max_connections)
+            {
+                println!(
+                    "{} | active connections: {} | response time: {:?}",
+                    i.addr, i.connections, i.response_time
+                );
             }
 
             sleep(health_check_interval).await;
