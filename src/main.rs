@@ -65,13 +65,13 @@ impl Config {
             let line = line?;
             if line.starts_with("load balancer:") {
                 let load_balancer = line
-                            .trim_start_matches("load balancer:")
-                            .trim()
-                            .parse::<hyper::Uri>();
+                    .trim_start_matches("load balancer:")
+                    .trim()
+                    .parse::<hyper::Uri>();
 
                 let load_balancer = match load_balancer {
                     Ok(load_balancer) => load_balancer,
-                    Err(_) =>  "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
+                    Err(_) => "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
                 };
 
                 self.load_balancer = load_balancer;
@@ -81,20 +81,20 @@ impl Config {
             } else if line.starts_with("servers:") {
                 let servers_str = line.trim_start_matches("servers:").trim();
                 servers = servers_str
-                    .split(",")
+                    .split(',')
                     .map(|server| server.trim().parse::<hyper::Uri>().expect("Invalid URI"))
                     .collect();
             } else if line.starts_with("weights:") {
                 let weights_str = line.trim_start_matches("weights:").trim();
                 weights = weights_str
-                    .split(",")
+                    .split(',')
                     .map(|weight| weight.trim().parse::<u32>().expect("Invalid weight"))
                     .collect();
                 // println!("{:?}", weights);
             } else if line.starts_with("max connections:") {
                 let max_connections_str = line.trim_start_matches("max connections:").trim();
                 max_connections = max_connections_str
-                    .split(",")
+                    .split(',')
                     .map(|max_connection| {
                         max_connection
                             .trim()
@@ -138,9 +138,9 @@ impl Config {
 
         let load_balancer = match load_balancer {
             Ok(load_balancer) => load_balancer,
-            Err(_) =>  "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
+            Err(_) => "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
         };
-        
+
         self.load_balancer = load_balancer;
 
         let algorithm = match algo {
@@ -181,19 +181,24 @@ fn main() -> Result<(), Box<dyn Error>> {
     "#,
         )
         .subcommand(
-            Command::new("start").about("Start the load balancer").arg(
-                Arg::new("address")
-                    .short('u')
-                    .long("address")
-                    .help("Starts load balancer at specified address"),
-            ).arg(
-                Arg::new("algorithm")
-                    .short('a')
-                    .long("algorithm")
-                    .default_value("round_robin")
-                    .help("Starts load balancer with specified algorithm
-Available algorithms: round_robin, weighted_round_robin"),
-            ),
+            Command::new("start")
+                .about("Start the load balancer")
+                .arg(
+                    Arg::new("address")
+                        .short('u')
+                        .long("address")
+                        .help("Starts load balancer at specified address"),
+                )
+                .arg(
+                    Arg::new("algorithm")
+                        .short('a')
+                        .long("algorithm")
+                        .default_value("round_robin")
+                        .help(
+                            "Starts load balancer with specified algorithm
+Available algorithms: round_robin, weighted_round_robin",
+                        ),
+                ),
         )
         .subcommand(Command::new("stop").about("Stop the load balancer"))
         .arg(
@@ -220,8 +225,8 @@ Available algorithms: round_robin, weighted_round_robin"),
     match res.subcommand_name() {
         Some("start") => {
             println!("Starting load balancer");
-            let start_args = res.subcommand_matches("start").unwrap();
             let path = res.get_one::<String>("path").unwrap();
+            let start_args = res.subcommand_matches("start").unwrap();
             let address = start_args.get_one::<String>("address");
             let algorithm = start_args.get_one::<String>("algorithm");
 
