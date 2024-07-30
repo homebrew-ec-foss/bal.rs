@@ -163,18 +163,17 @@ fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
                         .long("address")
                         .help("Starts load balancer at specified address"),
                 )
-                .arg(
-                    Arg::new("algorithm")
-                        .short('a')
-                        .long("algorithm")
-                        .help("Starts load balancer with specified algorithm. Available algorithms: round_robin, weighted_round_robin",),
-                )
+                .arg(Arg::new("algorithm").short('a').long("algorithm").help(
+                    "Starts load balancer with specified algorithm.
+Available algorithms: round_robin, weighted_round_robin, least_connections, 
+weighted_least_connections, least_response_time, weighted_least_response_time",
+                ))
                 .arg(
                     Arg::new("path")
                         .long("path")
                         .default_value("config.yaml")
                         .help("Specify path to config file"),
-                )
+                ),
         )
         .get_matches();
 

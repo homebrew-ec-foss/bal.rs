@@ -81,7 +81,9 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
 
                     lb.servers[index].response_time = duration;
 
-                    lb.servers[index].connections -= 1;
+                    if lb.servers[index].connections > 0 {
+                        lb.servers[index].connections -= 1;
+                    }
 
                     match response {
                         Ok(response) => {
@@ -316,7 +318,9 @@ where
 
     lb.servers[index].response_time = duration;
 
-    lb.servers[index].connections -= 1;
+    if lb.servers[index].connections > 0 {
+        lb.servers[index].connections -= 1;
+    }
 
     match data {
         Ok(data) => {
