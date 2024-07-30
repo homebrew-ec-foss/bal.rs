@@ -248,7 +248,7 @@ where
         // updates server details and gets a local copy of server
         let mut lb = lb.lock().unwrap();
 
-        let servers_alive = lb.servers.iter().filter(|server| server.alive && server.connections < server.max_connections).collect();
+        let servers_alive: Vec<&Server> = lb.servers.iter().filter(|server| server.alive && server.connections < server.max_connections).collect();
         let index_opt = load_balancer.lock().unwrap().get_index(&servers_alive);
         index_opt?;
 
@@ -365,5 +365,5 @@ async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Erro
 }
 
 pub trait Loadbalancer {
-    fn get_index(&mut self, lb: &Vec<&Server>) -> Option<usize>;
+    fn get_index(&mut self, lb: &[&Server]) -> Option<usize>;
 }

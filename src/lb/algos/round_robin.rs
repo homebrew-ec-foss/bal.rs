@@ -16,7 +16,7 @@ impl RoundRobin {
 }
 
 impl Loadbalancer for RoundRobin {
-    fn get_index(&mut self, servers: &Vec<&Server>) -> Option<usize> {
+    fn get_index(&mut self, servers: &[&Server]) -> Option<usize> {
         let index = self.counter.fetch_add(1, Ordering::SeqCst) % servers.len();
         Some(index)
     }
