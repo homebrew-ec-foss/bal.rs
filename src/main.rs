@@ -8,7 +8,6 @@ use std::time::Duration;
 
 mod lb;
 
-const VALID_ALGOS: [&str; 2] = ["round_robin", "weighted_round_robin"];
 #[derive(Debug)]
 struct Config {
     load_balancer: hyper::Uri,
@@ -85,12 +84,7 @@ impl Config {
                         .trim(),
                 };
 
-                if VALID_ALGOS.contains(&algorithm) {
-                    let algo = algorithm;
-                    self.algo = get_algo(algo);
-                } else {
-                    self.algo = get_algo(VALID_ALGOS[0]); //Default to round_robin
-                }
+                self.algo = get_algo(algorithm);
             } else if line.starts_with("servers:") {
                 let servers_str = line.trim_start_matches("servers:").trim();
                 servers = servers_str
