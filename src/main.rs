@@ -8,13 +8,13 @@ use std::time::Duration;
 
 mod lb;
 
+const VALID_ALGOS: [&str; 2] = ["round_robin", "weighted_round_robin"];
 #[derive(Debug)]
 struct Config {
     load_balancer: hyper::Uri,
     algo: Algorithm,
     servers: Vec<Server>,
     timeout: Duration,
-    //max_retries: u32,
     health_check_interval: Duration,
     dead_servers: Vec<Server>,
 }
@@ -47,12 +47,11 @@ impl Config {
             algo: Algorithm::RoundRobin, // using round robin as default algorithm
             servers: Vec::new(),
             timeout: Duration::from_secs(0),
-            //max_retries: 0,
             health_check_interval: Duration::from_secs(0),
             dead_servers: Vec::new(),
         }
     }
-    fn update(&mut self, path: &str, port: &str) -> io::Result<&Config> {
+    fn update(&mut self, path: &str, addr: Option<&str>, algorithm: Option<&str>) -> io::Result<&Config> {
         let path = Path::new(path);
         let file = File::open(path)?;
         let reader = BufReader::new(file);
@@ -64,30 +63,34 @@ impl Config {
         for line in reader.lines() {
             let line = line?;
             if line.starts_with("load balancer:") {
-                let load_balancer =
-                    (String::from("http://127.0.0.1:") + &String::from(port)).parse::<hyper::Uri>(); //CLI input
+                let addr = match addr {
+                    Some(addr) => addr, //CLI input
+                    None => line //If no CLI input take from config.yaml
+                        .trim_start_matches("load balancer:")
+                        .trim()
+                };
+
+                let load_balancer = String::from(addr).parse::<hyper::Uri>();
 
                 let load_balancer = match load_balancer {
                     Ok(load_balancer) => load_balancer,
-                    _ => {
-                        //If no CLI input, take addr from config.yaml
-                        let lobal = line
-                            .trim_start_matches("load balancer:")
-                            .trim()
-                            .parse::<hyper::Uri>();
-
-                        let lobal = match lobal {
-                            Ok(lobal) => lobal,
-                            Err(_) => "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
-                        };
-                        lobal
-                    }
+                    Err(_) => "http://127.0.0.1:8000".parse::<hyper::Uri>().unwrap(), //Default address for load balancer
                 };
-
                 self.load_balancer = load_balancer;
             } else if line.starts_with("algorithm:") {
-                let algo = line.trim_start_matches("algorithm:").trim();
-                self.algo = get_algo(algo);
+                let algorithm = match algorithm {
+                    Some(algorithm) => algorithm, //CLI input
+                    None => line //If no CLI input take from config.yaml
+                        .trim_start_matches("algorithm:")
+                        .trim(),
+                };
+
+                if VALID_ALGOS.contains(&algorithm) {
+                    let algo = algorithm;
+                    self.algo = get_algo(algo);
+                } else {
+                    self.algo = get_algo(VALID_ALGOS[0]); //Default to round_robin
+                }
             } else if line.starts_with("servers:") {
                 let servers_str = line.trim_start_matches("servers:").trim();
                 servers = servers_str
@@ -116,9 +119,6 @@ impl Config {
                 let timeout = line.trim_start_matches("timeout:").trim();
                 self.timeout =
                     Duration::from_secs(timeout.parse::<u64>().expect("Invalid timeout"));
-            // } else if line.starts_with("max retries:") {
-            //     let max_retries = line.trim_start_matches("max retries:").trim();
-            //     self.max_retries = max_retries.parse::<u32>().expect("Invalid timeout");
             } else if line.starts_with("health check interval:") {
                 let health_check_interval =
                     line.trim_start_matches("health check interval:").trim();
@@ -154,6 +154,7 @@ enum Algorithm {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut config = Config::new();
+    config.update("config.yaml", None, None)?;
 
     let res = command!()
         .about(
@@ -168,22 +169,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     "#,
         )
         .subcommand(
-            Command::new("start").about("Start the load balancer").arg(
-                Arg::new("port")
-                    .short('p')
-                    .long("port")
-                    .default_value("8000")
-                    .help("Starts load balancer at specified port"),
-            ), // .arg(
-               //     Arg::new("algorithm")
-               //         .short('a')
-               //         .long("algorithm")
-               //         .default_value("round_robin")
-               //         .help(
-               //             "Starts load balancer with specified algorithm\n
-               //     Available algorithms: round_robin, weighted_round_robin",
-               //         ),
-               // ),
+            Command::new("start")
+                .about("Start the load balancer")
+                .arg(Arg::new("address")
+                    .short('u')
+                    .long("address")
+                    .help("Starts load balancer at specified address")
+        )
+                .arg(Arg::new("algorithm").short('a').long("algorithm").help(
+                    "Starts load balancer with specified algorithm
+Available algorithms: round_robin, weighted_round_robin
+Default value: round_robin",
+                )),
         )
         .subcommand(Command::new("stop").about("Stop the load balancer"))
         .arg(
@@ -202,20 +199,26 @@ fn main() -> Result<(), Box<dyn Error>> {
         .get_matches();
 
     if *res.get_one::<bool>("server-count").unwrap() {
-        config.update("config.yaml", "8000")?;
         println!("{} servers listed", config.servers.len());
 
         return Ok(());
     }
-
+    let lb_string = &config.load_balancer.to_string();
     match res.subcommand_name() {
         Some("start") => {
             println!("Starting load balancer");
             let start_args = res.subcommand_matches("start").unwrap();
             let path = res.get_one::<String>("path").unwrap();
-            let port = start_args.get_one::<String>("port").unwrap();
+            let address = match start_args.get_one::<&str>("address"){
+                Some(addr) => Some(*addr),
+                None => Some(lb_string.as_str())
+            };
+            let algo = match start_args.get_one::<&str>("algorithm"){
+                Some(algo) => Some(*algo),
+                None => Some(get_algo_rev(config.algo.clone())),
+            };
 
-            config.update(path, port)?;
+            config.update(path, address, algo)?; //Update config with user input
             drop(lb::start_lb(config));
         }
         // Some("stop") => {
@@ -237,5 +240,16 @@ fn get_algo(algo: &str) -> Algorithm {
         "least_response_time" => Algorithm::LeastResponseTime,
         "weighted_least_response_time" => Algorithm::WeightedLeastResponseTime,
         _ => Algorithm::RoundRobin, // Default algorithms
+    }
+}
+
+fn get_algo_rev<'a>(algo: Algorithm) -> &'a str {
+    match algo {
+        Algorithm::RoundRobin => "round_robin",
+        Algorithm::WeightedRoundRobin => "weighted_round_robin",
+        Algorithm::LeastConnections => "least_connections",
+        Algorithm::WeightedLeastConnections => "weighted_least_connections",
+        Algorithm::LeastResponseTime => "least_response_time",
+        Algorithm::WeightedLeastResponseTime => "weighted_least_response_time",
     }
 }
