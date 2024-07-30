@@ -10,7 +10,7 @@ use hyper_util::rt::TokioIo;
 use std::str::FromStr;
 use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::{sleep, timeout};
+use tokio::time::{sleep, timeout};  
 
 use crate::{Algorithm, LoadBalancer, Server};
 mod algos;
@@ -81,7 +81,9 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                     
                     lb.servers[index].response_time = duration;
 
-                    lb.servers[index].connections -= 1;
+                    if lb.servers[index].connections > 0 {
+                        lb.servers[index].connections -= 1;
+                    }
 
                     match response {
                         Ok(response) => {
@@ -105,7 +107,7 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                 drop(task.await); // waits for all the servers to get updated
             }
 
-            println!("updated lb | health checker");
+            println!("updated lb | health checker | {:?}", lb_clone.lock().unwrap().servers.iter().filter(|server| server.alive && server.connections < server.max_connections).collect::<Vec<&Server>>());
 
             sleep(health_check_interval).await;
         }
@@ -261,6 +263,7 @@ where
         let index = index_opt.unwrap();
 
         lb.servers[index].connections += 1;
+        println!("{:?}", lb.servers);
         (lb.servers[index].clone(), lb.timeout, index)
     };
 
@@ -286,7 +289,9 @@ where
     
     lb.servers[index].response_time = duration;
 
-    lb.servers[index].connections -= 1;
+    if lb.servers[index].connections > 0 {
+        lb.servers[index].connections -= 1;
+    }
 
     match data {
         Ok(data) => {
