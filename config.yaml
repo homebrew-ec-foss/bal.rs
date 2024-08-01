@@ -10,7 +10,7 @@ servers: http://127.0.0.1:3001, http://127.0.0.1:3002, http://127.0.0.1:3003
 weights: 20, 30, 10
 !!  server weights
 
-max connections: 1000, 1000, 1
+max connections: 1000, 1000, 1000
 !!  max connections
 
 timeout: 10
