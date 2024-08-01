@@ -1,125 +1,109 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard};
-use http_body_util::{BodyExt, Empty, Full};
-use hyper::server::conn::http1;
-use hyper::service::service_fn;
-use hyper::{body::Bytes, Request, Uri, Response};
-use hyper_util::rt::TokioIo;
+use std::sync::{Arc, Mutex};
 use std::str::FromStr;
 use std::time::{Duration, Instant};
+use reqwest::Client;
+use http_body_util::{Empty, Full};
+use hyper::server::conn::http1;
+use hyper::service::service_fn;
+use hyper::{body::Bytes, Request, Response, Uri};
+use hyper_util::rt::TokioIo;
 use tokio::net::{TcpListener, TcpStream};
-use tokio::time::sleep;
-use tokio::sync::mpsc::{self, Receiver, Sender};
-use tokio::sync::RwLock;
-use std::collections::VecDeque;
-use std::fs::OpenOptions;
-use std::io::Write;
+use tokio::sync::{mpsc, RwLock};
+use tokio::time::{sleep, timeout};
 
-use crate::{Algorithm, Config};
+use crate::{Algorithm, LoadBalancer, Server};
 mod algos;
-use algos::round_robin::RoundRobin;
-use algos::weighted_round_robin::WeightedRoundRobin;
-use algos::least_response_time::LeastResponseTime;
-use algos::weighted_least_response_time::WeightedLeastResponseTime;
 use algos::least_connections::LeastConnections;
+use algos::least_response_time::LeastResponseTime;
+use algos::round_robin::RoundRobin;
 use algos::weighted_least_connections::WeightedLeastConnections;
-
-const REQUESTS_PER_SECOND_THRESHOLD: usize = 8000;
+use algos::weighted_least_response_time::WeightedLeastResponseTime;
+use algos::weighted_round_robin::WeightedRoundRobin;
 
 fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> {
-    let authority = uri
-        .authority()
-        .ok_or("URI does not have an authority part")?;
-
+    let authority = uri.authority().ok_or("URI does not have an authority part")?;
     let host = authority.host();
     let port = authority.port_u16().ok_or("URI does not have a port")?;
-
     let addr_str = format!("{}:{}", host, port);
     SocketAddr::from_str(&addr_str).map_err(|_| "Failed to parse SocketAddr")
 }
 
 #[tokio::main]
-pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let config = Arc::new(Mutex::new(config));
+pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (tx, mut rx) = mpsc::channel::<(String, Instant)>(100000);
+
     let request_counter = Arc::new(RwLock::new(RequestCounter::new()));
 
-    let (health_check_interval, len) = {
-        let config_lock = config.lock().unwrap();
-        (config_lock.health_check_interval, config_lock.servers.len())
-    };
-    let config_clone = Arc::clone(&config);
+    tokio::spawn(async move {
+        while let Some((uri, timestamp)) = rx.recv().await {
+            println!("Request to {} received at {:?}", uri, timestamp);
+            // Additional processing can be done here
+        }
+    });
 
-    let (tx, rx) = mpsc::channel::<(Request<hyper::body::Incoming>, Sender<Response<Full<Bytes>>>)>(100000);    
+    let lb = Arc::new(Mutex::new(lb));
+
+    let (health_check_interval, len, timeout_duration) = {
+        let lb_lock = lb.lock().unwrap();
+        (
+            lb_lock.health_check_interval,
+            lb_lock.servers.len(),
+            lb_lock.timeout,
+        )
+    };
+    let lb_clone = Arc::clone(&lb);
+
     tokio::task::spawn(async move {
         loop {
             let mut tasks = Vec::new();
 
             for index in 0..len {
-                let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
+                let lb_clone: Arc<Mutex<LoadBalancer>> = Arc::clone(&lb_clone);
 
                 let task = tokio::task::spawn(async move {
                     let server = {
-                        let mut config = config_clone.lock().unwrap();
+                        let mut lb = lb_clone.lock().unwrap();
 
-                        if let Some(server) = config.servers.get_mut(index) {
+                        if let Some(server) = lb.servers.get_mut(index) {
                             server.connections += 1;
                         }
 
-                        config.servers.get(index).cloned()
+                        lb.servers[index].clone()
                     };
-                    
-                    if let Some(server) = server {
-                        let start = Instant::now();
-                        let response = reqwest::get(server.addr.clone().to_string()).await;
-                        let duration = start.elapsed();
 
-                        let mut config = config_clone.lock().unwrap();
+                    let start = Instant::now();
+                    let response = timeout(
+                        timeout_duration,
+                        reqwest::get(server.addr.clone().to_string()),
+                    )
+                    .await;
+                    let duration = start.elapsed();
 
-                        let index = config.servers.iter().position(|c_server| c_server.addr == server.addr);
-                        
-                        if let Some(index) = index {
-                            config.servers[index].response_time = duration;
-                            config.servers[index].connections -= 1;
-                        }
+                    let mut lb = lb_clone.lock().unwrap();
 
-                        if let Err(_) = response {
-                            if let Some(index) = index {
-                                let dead_server = config.servers.remove(index);
-                                config.dead_servers.push(dead_server);
-                            }
-                        }
+                    lb.servers[index].response_time = duration;
+
+                    if lb.servers[index].connections > 0 {
+                        lb.servers[index].connections -= 1;
                     }
-                });
-                tasks.push(task);
-            }
 
-            for index in 0..len {
-                let config_clone: Arc<Mutex<Config>> = Arc::clone(&config_clone);
-                
-                let task = tokio::task::spawn(async move {
-                    let dead_server = {
-                        let config = config_clone.lock().unwrap();
-
-                        config.dead_servers.get(index).cloned()
-                    };
-                    
-                    if let Some(dead_server) = dead_server {
-                        let start = Instant::now();
-                        let response = reqwest::get(dead_server.addr.clone().to_string()).await;
-                        let duration = start.elapsed();
-
-                        let mut config = config_clone.lock().unwrap();
-
-                        let index = config.dead_servers.iter().position(|c_dead_server| c_dead_server.addr == dead_server.addr);
-
-                        if let Ok(_) = response {
-                            if let Some(index) = index {
-                                let mut dead_server = config.dead_servers.remove(index);
-                                dead_server.connections = 0;
-                                dead_server.response_time = duration;
-                                config.servers.push(dead_server);
+                    match response {
+                        Ok(response) => {
+                            if response.is_err()
+                                || lb.servers[index].connections
+                                    >= lb.servers[index].max_connections
+                            {
+                                lb.servers[index].connections = 0;
+                                lb.servers[index].alive = false;
+                            } else {
+                                lb.servers[index].alive = true;
                             }
+                        }
+                        Err(_) => {
+                            lb.servers[index].connections = 0;
+                            lb.servers[index].alive = false;
                         }
                     }
                 });
@@ -130,79 +114,88 @@ pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + 
                 drop(task.await);
             }
 
-            println!("updated config | health checker");
+            let lb_clone2: Arc<Mutex<LoadBalancer>> = Arc::clone(&lb_clone);
+            println!("Updated load balancer | Health checker");
+            for i in lb_clone2
+                .lock()
+                .unwrap()
+                .servers
+                .iter()
+                .filter(|server| server.alive && server.connections < server.max_connections)
+            {
+                println!(
+                    "{} | active connections: {} | response time: {:?}",
+                    i.addr, i.connections, i.response_time
+                );
+            }
 
             sleep(health_check_interval).await;
         }
     });
 
     let algo = {
-        let config_lock = config.lock().unwrap();
-        config_lock.algo.clone()
+        let lb_lock = lb.lock().unwrap();
+        lb_lock.algo.clone()
     };
-    
-    let config_clone = Arc::clone(&config);
-    
+
     match algo {
         Algorithm::RoundRobin => {
             let load_balancer = Arc::new(Mutex::new(RoundRobin::new()));
-            let config_clone = Arc::clone(&config);
-            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
-            drop(listen(tx.clone(), config_clone, Arc::clone(&request_counter)).await);
+            drop(listen(lb, load_balancer, tx, request_counter).await);
         }
         Algorithm::WeightedRoundRobin => {
             let load_balancer = Arc::new(Mutex::new(WeightedRoundRobin::new()));
-            let config_clone = Arc::clone(&config);
-            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
-            drop(listen(tx.clone(), config_clone, Arc::clone(&request_counter)).await);
+            drop(listen(lb, load_balancer, tx, request_counter).await);
         }
         Algorithm::LeastConnections => {
             let load_balancer = Arc::new(Mutex::new(LeastConnections::new()));
-            let config_clone = Arc::clone(&config);
-            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
-            drop(listen(tx.clone(), config_clone, Arc::clone(&request_counter)).await);
+            drop(listen(lb, load_balancer, tx, request_counter).await);
         }
         Algorithm::WeightedLeastConnections => {
             let load_balancer = Arc::new(Mutex::new(WeightedLeastConnections::new()));
-            let config_clone = Arc::clone(&config);
-            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
-            drop(listen(tx.clone(), config_clone, Arc::clone(&request_counter)).await);
+            drop(listen(lb, load_balancer, tx, request_counter).await);
         }
         Algorithm::LeastResponseTime => {
             let load_balancer = Arc::new(Mutex::new(LeastResponseTime::new()));
-            let config_clone = Arc::clone(&config);
-            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
-            drop(listen(tx.clone(), config_clone, Arc::clone(&request_counter)).await);
+            drop(listen(lb, load_balancer, tx, request_counter).await);
         }
         Algorithm::WeightedLeastResponseTime => {
             let load_balancer = Arc::new(Mutex::new(WeightedLeastResponseTime::new()));
-            let config_clone = Arc::clone(&config);
-            tokio::spawn(process_queue(rx, Arc::clone(&config_clone), load_balancer));
-            drop(listen(tx.clone(), config_clone, Arc::clone(&request_counter)).await);
+            drop(listen(lb, load_balancer, tx, request_counter).await);
         }
     }
 
     Ok(())
 }
 
-async fn listen(
-    tx: Sender<(Request<hyper::body::Incoming>, Sender<Response<Full<Bytes>>>)>,
-    config: Arc<Mutex<Config>>,
+async fn listen<T>(
+    lb: Arc<Mutex<LoadBalancer>>,
+    load_balancer: Arc<Mutex<T>>,
+    tx: mpsc::Sender<(String, Instant)>,
     request_counter: Arc<RwLock<RequestCounter>>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let addr = uri_to_socket_addr(&config.lock().unwrap().load_balancer).unwrap();
-    println!("Server is running on http://{}", addr);
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
+where
+    T: Loadbalancer + Send + 'static,
+{
+    let addr = uri_to_socket_addr(&lb.lock().unwrap().load_balancer).unwrap();
+    let listener = match TcpListener::bind(addr).await {
+        Ok(listener) => {
+            println!("Load balancer is running on http://{}", addr);
+            listener
+        }
+        Err(err) => {
+            eprintln!("{}", err);
+            return Ok(());
+        }
+    };
 
-    let listener = TcpListener::bind(addr).await?;
     loop {
         let (stream, _) = listener.accept().await?;
-        let client_addr = stream.peer_addr()?;
-        println!(
-            "Accepted connection from {} to load balancer {}",
-            client_addr, addr
-        );
 
         let io = TokioIo::new(stream);
+
+        let lb_clone = Arc::clone(&lb);
+        let load_balancer_clone = Arc::clone(&load_balancer);
         let tx_clone = tx.clone();
         let request_counter_clone = Arc::clone(&request_counter);
 
@@ -211,49 +204,13 @@ async fn listen(
                 .serve_connection(
                     io,
                     service_fn(move |req| {
-                        let (response_tx, mut response_rx) = mpsc::channel(1);
-                        let request_counter_clone = Arc::clone(&request_counter_clone);
-                        let tx_clone = tx_clone.clone();
-
-                        async move {
-                            let mut counter = request_counter_clone.write().await;
-                            counter.add_request();
-
-                            if counter.request_rate() > REQUESTS_PER_SECOND_THRESHOLD {
-				let mut file = OpenOptions::new()
-                                    .create(true)
-                                    .append(true)
-                                    .open("request_rate_log.txt")
-                                    .unwrap();
-                                writeln!(file, "Request rate exceeded 8000 requests per second. Adding to the queue.")
-                                    .unwrap();
-                                if tx_clone.try_send((req, response_tx)).is_err() {
-                                    eprintln!("Failed to send request to processing queue");
-                                }
-                            } else {
-                                if response_tx
-                                    .send(Response::builder()
-                                        .status(200)
-                                        .body(Full::new(Bytes::from("Request processed immediately")))
-                                        .unwrap())
-                                    .await
-                                    .is_err()
-                                {
-                                    eprintln!("Failed to send immediate response");
-                                }
-                            }
-
-                            match response_rx.recv().await {
-                                Some(response) => Ok::<_, Infallible>(response),
-                                None => {
-                                    eprintln!("Failed to receive response");
-                                    Ok::<_, Infallible>(Response::builder()
-                                        .status(500)
-                                        .body(Full::new(Bytes::from("Internal Server Error")))
-                                        .unwrap())
-                                }
-                            }
-                        }
+                        handle_request(
+                            req,
+                            Arc::clone(&lb_clone),
+                            Arc::clone(&load_balancer_clone),
+                            tx_clone.clone(),
+                            Arc::clone(&request_counter_clone)
+                        )
                     }),
                 )
                 .await
@@ -264,211 +221,144 @@ async fn listen(
     }
 }
 
-async fn process_queue<T>(
-    mut rx: Receiver<(Request<hyper::body::Incoming>, Sender<Response<Full<Bytes>>>)>,
-    config: Arc<Mutex<Config>>,
-    load_balancer: Arc<Mutex<T>>,
-) where
-    T: LoadBalancer + Send + 'static,
-{
-    while let Some((req, response_tx)) = rx.recv().await {
-        match handle_request(
-            Arc::new(Some(req)),
-            Arc::clone(&config),
-            Arc::clone(&load_balancer),
-        )
-        .await
-        {
-            Ok(response) => {
-                if response_tx.send(response).await.is_err() {
-                    eprintln!("Failed to send response");
-                }
-            }
-            Err(_) => {
-                eprintln!("Failed to handle request");
-                let response = Response::builder()
-                    .status(500)
-                    .body(Full::new(Bytes::from("Internal Server Error")))
-                    .unwrap();
-                if response_tx.send(response).await.is_err() {
-                    eprintln!("Failed to send error response");
-                }
-            }
-        }
-    }
-}
-
 async fn handle_request<T>(
-    req: Arc<Option<Request<hyper::body::Incoming>>>,
-    config: Arc<Mutex<Config>>,
+    req: Request<hyper::body::Incoming>,
+    lb: Arc<Mutex<LoadBalancer>>,
     load_balancer: Arc<Mutex<T>>,
+    tx: mpsc::Sender<(String, Instant)>,
+    request_counter: Arc<RwLock<RequestCounter>>,
 ) -> Result<Response<Full<Bytes>>, Infallible>
 where
-    T: LoadBalancer,
+    T: Loadbalancer,
 {
+    let timeout_duration = lb.lock().unwrap().timeout;
+    let uri_clone = req.uri().clone();
+    let method_clone = req.method().clone();
+    let client = Client::new();
+
+    let mut request_counter = request_counter.write().await;
+    request_counter.increment();
+    let current_rate = request_counter.get_rate();
+    drop(request_counter);
+
+    if current_rate > 1000 {
+        // Queue the request
+        let _ = tx.send((uri_clone.to_string(), Instant::now())).await;
+        return Ok(Response::new(Full::from(Bytes::from("Request queued due to high load"))));
+    }
+
     loop {
-        let len = config.lock().unwrap().servers.len();
-        if len > 0 {
-            match get_request(
-                Arc::clone(&req),
-                Arc::clone(&config),
-                Arc::clone(&load_balancer),
-            )
-            .await
-            {
-                Some(request) => {
-                    return request;
-                }
-                None => {
-                    eprintln!("Rerouting request to a new server");
+        let (servers_alive, server_indices): (Vec<Server>, Vec<usize>) = {
+            let lb = lb.lock().unwrap();
+            lb.servers.iter().enumerate()
+                .filter(|(_, server)| server.alive && server.connections < server.max_connections)
+                .map(|(index, server)| (server.clone(), index))
+                .unzip()
+        };
+
+        if servers_alive.is_empty() {
+            println!("All servers are dead | No backend servers available");
+            return Ok(Response::new(Full::from(Bytes::from("No backend servers available"))));
+        }
+
+        let servers_alive_refs: Vec<&Server> = servers_alive.iter().collect();
+
+        let index_option = {
+            let mut load_balancer = load_balancer.lock().unwrap();
+            load_balancer.get_index(&servers_alive_refs)
+        };
+
+        if let Some(index) = index_option {
+            let server_index = server_indices[index];
+            let server = {
+                let mut lb = lb.lock().unwrap();
+                let server = &mut lb.servers[server_index];
+                server.connections += 1;
+                server.clone()
+            };
+
+            println!(
+                "Sending request to {} | Active connections: {}",
+                server.addr, server.connections
+            );
+
+            let url = format!("{}{}", server.addr, uri_clone.path());
+            let request = client.request(method_clone.clone(), url.clone());
+
+            match timeout(timeout_duration, request.send()).await {
+                Ok(response) => match response {
+                    Ok(resp) => {
+                        let _ = tx.send((url.clone(), Instant::now())).await;
+                        return Ok(Response::new(Full::from(Bytes::from(
+                            resp.text().await.unwrap(),
+                        ))));
+                    }
+                    Err(e) => {
+                        eprintln!("Error executing request: {:?}", e);
+                        // Mark server as dead or reduce its connection count
+                        let mut lb = lb.lock().unwrap();
+                        if let Some(server) = lb.servers.get_mut(server_index) {
+                            if server.connections > 0 {
+                                server.connections -= 1;
+                            }
+                            server.alive = false;
+                        }
+                    }
+                },
+                Err(e) => {
+                    eprintln!("Request timed out or failed: {:?}", e);
+                    // Mark server as dead or reduce its connection count
+                    let mut lb = lb.lock().unwrap();
+                    if let Some(server) = lb.servers.get_mut(server_index) {
+                        if server.connections > 0 {
+                            server.connections -= 1;
+                        }
+                        server.alive = false;
+                    }
                 }
             }
         } else {
-            eprintln!("No servers available");
-            let body = format!("No servers available, please try again");
-            let response = Response::builder()
-                .status(500)
-                .body(Full::new(Bytes::from(body)))
-                .unwrap();
-            return Ok(response);
-        }
-    }
-}
-
-async fn get_request<T>(
-    req: Arc<Option<Request<hyper::body::Incoming>>>,
-    config: Arc<Mutex<Config>>,
-    load_balancer: Arc<Mutex<T>>,
-) -> Option<Result<Response<Full<Bytes>>, Infallible>>
-where
-    T: LoadBalancer,
-{
-    let server = {
-        let mut config = config.lock().unwrap();
-
-        let index_opt = load_balancer.lock().unwrap().get_index(Arc::new(&config));
-        if index_opt == None {
-            return None;
-        }
-        let index = index_opt.unwrap();
-
-        config.servers[index].connections += 1;
-        config.servers[index].clone()
-    };
-
-    let request = match &*req {
-        Some(req) => format!("{}{}", server.addr.clone(), req.uri().to_string().trim_start_matches("/")),
-        None => server.addr.to_string(),
-    };
-
-    println!("forwarded request to {:?}", request);
-
-    let start = Instant::now();
-
-    let data = send_request(request).await;
-
-    let duration = start.elapsed();
-
-    let mut config = config.lock().unwrap();
-
-    let index = config.servers.iter().position(|c_server| c_server.addr == server.addr);
-        
-    if let Some(index) = index {
-        config.servers[index].response_time = duration;
-        config.servers[index].connections -= 1;
-    }
-
-    match data {
-        Ok(data) => {
-            return Some(Ok(Response::new(Full::new(data))));
-        },
-        Err(_) => {
-            if let Err(_) = data {
-                if let Some(index) = index {
-                    let dead_server = config.servers.remove(index);
-                    config.dead_servers.push(dead_server);
-                }
-            }
-            return None;
-        }
-    }
-}
-
-async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Error + Send + Sync>> {
-    let url = request.parse::<hyper::Uri>()?;
-
-    let host = url.host().expect("uri has no host");
-    let port = url.port_u16().unwrap_or(80);
-
-    let address = format!("{}:{}", host, port);
-
-    let stream = TcpStream::connect(address).await?;
-
-    let io = TokioIo::new(stream);
-
-    let (mut sender, conn) = hyper::client::conn::http1::handshake(io).await?;
-
-    tokio::task::spawn(async move {
-        if let Err(err) = conn.await {
-            println!("Connection failed: {:?}", err);
-        }
-    });
-
-    let authority = url.authority().unwrap().clone();
-
-    let req = Request::builder()
-        .uri(url)
-        .header(hyper::header::HOST, authority.as_str())
-        .body(Empty::<Bytes>::new())?;
-
-    let mut res = sender.send_request(req).await?;
-
-    println!("Response status: {}", res.status());
-
-    let mut full_body = Vec::new();
-
-    while let Some(next) = res.frame().await {
-        let frame = next?;
-        if let Some(chunk) = frame.data_ref() {
-            full_body.extend_from_slice(chunk);
+            // If no index was found, break the loop to avoid infinite loop
+            break;
         }
     }
 
-    Ok(Bytes::from(full_body))
-}
-
-pub trait LoadBalancer {
-    fn get_index(&mut self, config: Arc<&MutexGuard<Config>>) -> Option<usize>;
+    // If all servers are exhausted and none could handle the request
+    Ok(Response::new(Full::from(Bytes::from("No backend servers available"))))
 }
 
 struct RequestCounter {
-    request_times: VecDeque<Instant>,
+    requests: u64,
+    last_checked: Instant,
 }
 
 impl RequestCounter {
-    pub fn new() -> Self {
-        Self {
-            request_times: VecDeque::with_capacity(REQUESTS_PER_SECOND_THRESHOLD),
+    fn new() -> Self {
+        RequestCounter {
+            requests: 0,
+            last_checked: Instant::now(),
         }
     }
 
-    pub fn add_request(&mut self) {
+    // Ensure `get_rate` method takes a mutable reference
+    fn get_rate(&mut self) -> u64 {
         let now = Instant::now();
-        self.request_times.push_back(now);
-        self.clean_up(now);
-    }
+        let duration = now.duration_since(self.last_checked);
 
-    pub fn request_rate(&self) -> usize {
-        self.request_times.len()
-    }
-
-    fn clean_up(&mut self, now: Instant) {
-        while let Some(&time) = self.request_times.front() {
-            if now.duration_since(time) > Duration::from_secs(1) {
-                self.request_times.pop_front();
-            } else {
-                break;
-            }
+        if duration.as_secs() > 1 {
+            // Reset the counter and update the last_checked timestamp
+            self.requests = 0;
+            self.last_checked = now;
         }
+        self.requests
     }
+
+    // Method to increment the request count
+    fn increment(&mut self) {
+        self.requests += 1;
+    }
+}
+
+pub trait Loadbalancer {
+    fn get_index(&mut self, servers_alive: &[&Server]) -> Option<usize>;
 }
