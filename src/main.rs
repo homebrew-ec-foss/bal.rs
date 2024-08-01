@@ -151,6 +151,7 @@ fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
 |  _ < / _` | | | '__/ __|
 | |_) | (_| | |_| |  \__ \
 |____/ \__,_|_(_)_|  |___/
+L7 Load Balancer Implemented in Rust 🦀
     "#,
         )
         .subcommand(
