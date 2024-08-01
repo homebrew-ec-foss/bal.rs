@@ -8,7 +8,7 @@ use hyper::service::service_fn;
 use hyper::{body::Bytes, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
 use std::str::FromStr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
 
@@ -39,18 +39,20 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
     // starts the load balancer
     let lb = Arc::new(Mutex::new(lb));
 
-    let (health_check_interval, len, timeout_duration) = {
+    let (health_check_interval, len, timeout_duration, report) = {
         // gets health check interval and number of servers
         let lb_lock = lb.lock().unwrap();
         (
             lb_lock.health_check_interval,
             lb_lock.servers.len(),
             lb_lock.timeout,
+            lb_lock.report,
         )
     };
     let lb_clone = Arc::clone(&lb); //creates a clone for health checker
 
     tokio::task::spawn(async move {
+        let mut health_checks: u32 = 0;
         loop {
             let mut tasks = Vec::new();
 
@@ -63,6 +65,7 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                         let mut lb = lb_clone.lock().unwrap();
 
                         if let Some(server) = lb.servers.get_mut(index) {
+                            server.connections_served += 1;
                             server.connections += 1;
                         }
 
@@ -110,19 +113,58 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                 drop(task.await); // waits for all the servers to get updated
             }
 
-            let lb_clone2: Arc<Mutex<LoadBalancer>> = Arc::clone(&lb_clone);
-            println!("Updated load balancer | Health checker");
-            for i in lb_clone2
-                .lock()
-                .unwrap()
-                .servers
-                .iter()
-                .filter(|server| server.alive && server.connections < server.max_connections)
-            {
-                println!(
-                    "{} | active connections: {} | response time: {:?}",
-                    i.addr, i.connections, i.response_time
-                );
+            if report {
+                health_checks += 1;
+                let lb_lock = lb_clone.lock().unwrap();
+                let mut report = String::new();
+                report += &format!("health check: {}\n", health_checks);
+                report += "+-------------------------------------------------------------------------------------------+\n";
+                report += "|                                       Server Report                                       |\n";
+                report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
+                report += "| Address                | Status  | Response Time | Connections | Connections Served       |\n";
+                report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
+
+                let mut total_connections = 0;
+                let mut total_connections_served = 0;
+                let mut total_response_time = Duration::from_secs(0);
+                let mut alive_servers = 0;
+
+                for server in lb_lock.servers.iter() {
+                    let status = if server.alive { "Alive  " } else { "Dead   " };
+                    let bar = if server.alive { "🟢" } else { "🔴" };
+                    let response_time = format!("{:?}", server.response_time);
+                    report += &format!(
+                        "| {:<20} | {:<7} | {:<13} | {:<11} | {:<24} | {}\n",
+                        server.addr, status, response_time, server.connections, server.connections_served, bar
+                    );
+                    
+                    total_connections += server.connections;
+                    total_connections_served += server.connections_served;
+                    if server.alive {
+                        alive_servers += 1;
+                        total_response_time += server.response_time;
+                    }
+                }
+            
+                report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
+
+                let avg_response_time = if alive_servers > 0 {
+                    total_response_time / alive_servers as u32
+                } else {
+                    Duration::from_secs(0)
+                };
+
+                report += "\n+----------------------------------+\n";
+                report += "|           LB Summary             |\n";
+                report += "+----------------------------------+\n";
+                report += &format!("| Total Connections    : {:<10}|\n", total_connections);
+                report += &format!("| Connections Served   : {:<10}|\n", total_connections_served);
+                report += &format!("| Avg Response Time    : {:<10?}|\n", avg_response_time);
+                report += &format!("| Alive Servers        : {:<10}|\n", alive_servers);
+                report += "+----------------------------------+\n";
+
+                print!("\x1B[2J\x1B[H");
+                println!("{}", report);
             }
 
             sleep(health_check_interval).await;
@@ -293,6 +335,7 @@ where
         let index = index_opt.unwrap();
 
         lb.servers[index].connections += 1;
+        lb.servers[index].connections_served += 1;
         (lb.servers[index].clone(), lb.timeout, index)
     };
 
@@ -305,7 +348,7 @@ where
         None => server.addr.to_string(),
     }; // updates the address
 
-    println!("forwarded request to {:?}", request);
+    // println!("forwarded request to {:?}", request);
 
     let start = Instant::now();
 
@@ -384,7 +427,7 @@ async fn send_request(request: String) -> Result<Bytes, Box<dyn std::error::Erro
     // Await the response...
     let mut res = sender.send_request(req).await?;
 
-    println!("Response status: {}", res.status());
+    // println!("Response status: {}", res.status());
 
     let mut full_body = Vec::new();
 
