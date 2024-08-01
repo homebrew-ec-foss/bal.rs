@@ -142,7 +142,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
-    let res = command!().arg_required_else_help(true)
+    let res = command!()
+        .arg_required_else_help(true)
         .about(
             r#"
  ____        _            
