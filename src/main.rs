@@ -141,6 +141,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     lb.update("config.yaml")?;
 
     cli(lb)
+    // drop(lb::start_lb(lb));
+    // Ok(())
 }
 
 fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
@@ -197,6 +199,7 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
             let report = start_args.get_one::<bool>("report");
 
             if let Some(path) = path {
+                lb.servers = Vec::new();
                 lb.update(path).unwrap();
             }
 
