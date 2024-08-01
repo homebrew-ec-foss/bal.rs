@@ -1,4 +1,4 @@
-use clap::{command, Arg, Command};
+use clap::{command, Arg, ArgAction, Command};
 use std::env;
 use std::error::Error;
 use std::fs::File;
@@ -15,6 +15,7 @@ struct LoadBalancer {
     servers: Vec<Server>,
     timeout: Duration,
     health_check_interval: Duration,
+    report: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -48,6 +49,7 @@ impl LoadBalancer {
             servers: Vec::new(),
             timeout: Duration::from_secs(0),
             health_check_interval: Duration::from_secs(0),
+            report: true,
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&LoadBalancer> {
@@ -165,14 +167,22 @@ L7 Load Balancer Implemented in Rust 🦀
                 )
                 .arg(Arg::new("algorithm").short('a').long("algorithm").help(
                     "Starts load balancer with specified algorithm.
-Available algorithms: round_robin, weighted_round_robin, least_connections, 
-weighted_least_connections, least_response_time, weighted_least_response_time",
+Available algorithms: round_robin/rr, weighted_round_robin/wrr, least_connections/lc, 
+weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response_time/wlrc",
                 ))
                 .arg(
                     Arg::new("path")
+                        .short('p')
                         .long("path")
                         .default_value("config.yaml")
                         .help("Specify path to config file"),
+                )
+                .arg(
+                    Arg::new("report")
+                        .short('r')
+                        .long("report")
+                        .action(ArgAction::SetTrue)
+                        .help("Prints server status"),
                 ),
         )
         .get_matches();
@@ -184,6 +194,7 @@ weighted_least_connections, least_response_time, weighted_least_response_time",
             let path = start_args.get_one::<String>("path");
             let address = start_args.get_one::<String>("address");
             let algorithm = start_args.get_one::<String>("algorithm");
+            let report = start_args.get_one::<bool>("report");
 
             if let Some(path) = path {
                 lb.update(path).unwrap();
@@ -197,6 +208,10 @@ weighted_least_connections, least_response_time, weighted_least_response_time",
                 lb.algo = get_algo(algorithm);
             }
 
+            if let Some(report) = report {
+                lb.report = *report;
+            }
+
             drop(lb::start_lb(lb));
         }
         _ => println!("Invalid command"),
@@ -207,12 +222,12 @@ weighted_least_connections, least_response_time, weighted_least_response_time",
 
 fn get_algo(algo: &str) -> Algorithm {
     match algo {
-        "round_robin" => Algorithm::RoundRobin,
-        "weighted_round_robin" => Algorithm::WeightedRoundRobin,
-        "least_connections" => Algorithm::LeastConnections,
-        "weighted_least_connections" => Algorithm::WeightedLeastConnections,
-        "least_response_time" => Algorithm::LeastResponseTime,
-        "weighted_least_response_time" => Algorithm::WeightedLeastResponseTime,
+        // "round_robin" => Algorithm::RoundRobin,
+        "weighted_round_robin" | "wrr" => Algorithm::WeightedRoundRobin,
+        "least_connections" | "lc" => Algorithm::LeastConnections,
+        "weighted_least_connections" | "wlc" => Algorithm::WeightedLeastConnections,
+        "least_response_time" | "lrt" => Algorithm::LeastResponseTime,
+        "weighted_least_response_time" | "wlrt" => Algorithm::WeightedLeastResponseTime,
         _ => Algorithm::RoundRobin, // Default algorithms
     }
 }
