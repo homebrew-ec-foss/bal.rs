@@ -8,7 +8,7 @@ use hyper::service::service_fn;
 use hyper::{body::Bytes, Request, Response, Uri};
 use hyper_util::rt::TokioIo;
 use std::str::FromStr;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{sleep, timeout};
 
@@ -52,6 +52,7 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
     let lb_clone = Arc::clone(&lb); //creates a clone for health checker
 
     tokio::task::spawn(async move {
+        let mut health_checks: u32 = 0;
         loop {
             let mut tasks = Vec::new();
 
@@ -64,6 +65,7 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                         let mut lb = lb_clone.lock().unwrap();
 
                         if let Some(server) = lb.servers.get_mut(index) {
+                            server.connections_served += 1;
                             server.connections += 1;
                         }
 
@@ -112,24 +114,56 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
             }
 
             if report {
-                let lb_lock = lb_clone.lock().unwrap();let mut report = String::new();
-                report += "+----------------------------------------------------------------+\n";
-                report += "|                         Server Report                          |\n";
-                report += "+--------------------------+---------+---------------+-----------+\n";
-                report += "| Address                | Status  | Response Time | Connections |\n";
-                report += "+------------------------+---------+---------------+-------------+\n";
-            
+                health_checks += 1;
+                let lb_lock = lb_clone.lock().unwrap();
+                let mut report = String::new();
+                report += &format!("health check: {}\n", health_checks);
+                report += "+-------------------------------------------------------------------------------------------+\n";
+                report += "|                                       Server Report                                       |\n";
+                report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
+                report += "| Address                | Status  | Response Time | Connections | Connections Served       |\n";
+                report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
+
+                let mut total_connections = 0;
+                let mut total_connections_served = 0;
+                let mut total_response_time = Duration::from_secs(0);
+                let mut alive_servers = 0;
+
                 for server in lb_lock.servers.iter() {
                     let status = if server.alive { "Alive  " } else { "Dead   " };
                     let bar = if server.alive { "🟢" } else { "🔴" };
                     let response_time = format!("{:?}", server.response_time);
                     report += &format!(
-                        "| {:<20} | {:<7} | {:<13} | {:<11} | {}\n",
-                        server.addr, status, response_time, server.connections, bar
+                        "| {:<20} | {:<7} | {:<13} | {:<11} | {:<24} | {}\n",
+                        server.addr, status, response_time, server.connections, server.connections_served, bar
                     );
+                    
+                    total_connections += server.connections;
+                    total_connections_served += server.connections_served;
+                    if server.alive {
+                        alive_servers += 1;
+                        total_response_time += server.response_time;
+                    }
                 }
             
-                report += "+------------------------+---------+---------------+-------------+\n";
+                report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
+
+                let avg_response_time = if alive_servers > 0 {
+                    total_response_time / alive_servers as u32
+                } else {
+                    Duration::from_secs(0)
+                };
+
+                report += "\n+----------------------------------+\n";
+                report += "|           LB Summary             |\n";
+                report += "+----------------------------------+\n";
+                report += &format!("| Total Connections    : {:<10}|\n", total_connections);
+                report += &format!("| Connections Served   : {:<10}|\n", total_connections_served);
+                report += &format!("| Avg Response Time    : {:<10?}|\n", avg_response_time);
+                report += &format!("| Alive Servers        : {:<10}|\n", alive_servers);
+                report += "+----------------------------------+\n";
+
+                print!("\x1B[2J\x1B[H");
                 println!("{}", report);
             }
 
@@ -301,6 +335,7 @@ where
         let index = index_opt.unwrap();
 
         lb.servers[index].connections += 1;
+        lb.servers[index].connections_served += 1;
         (lb.servers[index].clone(), lb.timeout, index)
     };
 

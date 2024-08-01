@@ -26,6 +26,7 @@ struct Server {
     connections: u32,
     max_connections: u32,
     alive: bool,
+    connections_served: u32,
 }
 
 impl Server {
@@ -37,6 +38,7 @@ impl Server {
             response_time: Duration::from_secs(0),
             connections: 0,
             alive: true,
+            connections_served: 0,
         }
     }
 }
