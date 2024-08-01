@@ -22,10 +22,20 @@ L7 Load Balancer Implemented in Rust 🦀
 - [Aditya Hegde](https://github.com/bwaklog)
 
 ## Getting started
-Note that to build locally you need to have the [Rust compiler and Cargo package manager installed](https://doc.rust-lang.org/book/ch01-01-installation.html)
-If you already have them installed, clone the repository and build the application using cargo
+Note that to build locally you need to have the [Rust compiler and Cargo package manager installed](https://doc.rust-lang.org/book/ch01-01-installation.html).
+If you already have them installed, clone the repository and build the application using cargo.
 ```sh
 git clone github.com/homebrew-ec-foss/bal.rs
 cd bal.rs
 cargo build
 ```
+If you are not planning on development, you could instead run
+```sh
+cargo build --release
+```
+
+## How to Use
+The main executable after building will be located in /target/debug or /target/release based on which build command you used.
+In the terminal type ``` Balrs help ``` to get a list of available commands.
+
+Alternatively, you can do ``` cargo run help ``` for the same result
