@@ -1,0 +1,36 @@
+services:
+  flask-app-3001:
+    build: .
+    ports:
+      - "3001:3001"
+    command: python app.py 3001
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /code
+
+  flask-app-3002:
+    build: .
+    ports:
+      - "3002:3002"
+    command: python app.py 3002
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /code
+
+  flask-app-3003:
+    build: .
+    ports:
+      - "3003:3003"
+    command: python app.py 3003
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /code
+
+  redis:
+    image: "redis:alpine"
