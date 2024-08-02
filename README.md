@@ -51,10 +51,10 @@ for the same result.
 ### The Config file
 The `config.yaml` file allows you to customize the Load Balancer settings:
 
-- Load Balancer address: The URL of the Load Balancer(Default: http://localhost:8000)
-- Algorithm: The load balancing algorithm to be used by Balrs(Default: round robin)
-- Servers: List of server URLs to which Balrs can send requests
-- Weights: List of weights of respective servers, used by weighted load balancing algorithms
-- Max connections: List of the maximum number of connections each server is allowed to handle
-- Timeout: Maximum time allowed for a server to respond before it is marked as dead
-- Health check interval: Time interval at which server health checks are performed
+- <mark>**Load Balancer address**</mark>: The URL of the Load Balancer(Default: http://localhost:8000)
+- <mark>**Algorithm**</mark>: The load balancing algorithm to be used by Balrs(Default: round robin)
+- <mark>**Servers**</mark>: List of server URLs to which Balrs can send requests
+- <mark>**Weights**</mark>: List of weights of respective servers, used by weighted load balancing algorithms
+- <mark>**Max connections**</mark>: List of the maximum number of connections each server is allowed to handle
+- <mark>**Timeout**</mark>: Maximum time allowed for a server to respond before it is marked as dead
+- <mark>**Health check interval**</mark>: Time interval at which server health checks are performed
