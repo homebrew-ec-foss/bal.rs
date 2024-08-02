@@ -16,6 +16,8 @@ struct LoadBalancer {
     timeout: Duration,
     health_check_interval: Duration,
     report: bool,
+    save_file: String,
+    save: bool
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -52,6 +54,8 @@ impl LoadBalancer {
             timeout: Duration::from_secs(0),
             health_check_interval: Duration::from_secs(0),
             report: true,
+            save_file: String::from("data.txt"),
+            save: false
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&LoadBalancer> {
@@ -188,7 +192,13 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
                         .long("report")
                         .action(ArgAction::SetTrue)
                         .help("Prints server status"),
-                ),
+                )
+                .arg(
+                    Arg::new("save file")
+                        .short('s')
+                        .long("save")
+                        .help("Saves report data to specified file"),
+                )
         )
         .get_matches();
 
@@ -200,6 +210,7 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
             let address = start_args.get_one::<String>("address");
             let algorithm = start_args.get_one::<String>("algorithm");
             let report = start_args.get_one::<bool>("report");
+            let save = start_args.get_one::<String>("save file");
 
             if let Some(path) = path {
                 lb.servers = Vec::new();
@@ -216,6 +227,11 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
 
             if let Some(report) = report {
                 lb.report = *report;
+            }
+
+            if let Some(save) = save {
+                lb.save_file = save.clone();
+                lb.save = true;
             }
 
             drop(lb::start_lb(lb));

@@ -1,6 +1,7 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::io::Write;
 
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
@@ -39,7 +40,7 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
     // starts the load balancer
     let lb = Arc::new(Mutex::new(lb));
 
-    let (health_check_interval, len, timeout_duration, report) = {
+    let (health_check_interval, len, timeout_duration, report, save, save_file) = {
         // gets health check interval and number of servers
         let lb_lock = lb.lock().unwrap();
         (
@@ -47,6 +48,8 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
             lb_lock.servers.len(),
             lb_lock.timeout,
             lb_lock.report,
+            lb_lock.save,
+            lb_lock.save_file.clone()
         )
     };
     let lb_clone = Arc::clone(&lb); //creates a clone for health checker
@@ -113,11 +116,12 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                 drop(task.await); // waits for all the servers to get updated
             }
 
-            if report {
+            if report || save {
                 health_checks += 1;
                 let lb_lock = lb_clone.lock().unwrap();
+                let report_bool = report;
                 let mut report = String::new();
-                report += &format!("health check: {}\n", health_checks);
+                report += &format!("Health check #{}\n", health_checks);
                 report += "+-------------------------------------------------------------------------------------------+\n";
                 report += "|                                       Server Report                                       |\n";
                 report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
@@ -163,8 +167,21 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                 report += &format!("| Alive Servers        : {:<10}|\n", alive_servers);
                 report += "+----------------------------------+\n";
 
-                print!("\x1B[2J\x1B[H");
-                println!("{}", report);
+                if report_bool {
+                    print!("\x1B[2J\x1B[H");
+                    println!("{}", report);
+                }
+
+                if save {
+                    let mut file = std::fs::OpenOptions::new()
+                        .append(true)
+                        .create(true)
+                        .open(&save_file).unwrap();
+
+                    let t = chrono::prelude::Local::now().format("%d/%m/%y %H:%M:%S").to_string();
+                    drop(writeln!(file, "Log: {:?}", t));
+                    drop(writeln!(file, "{}", report));
+                }
             }
 
             sleep(health_check_interval).await;
@@ -348,12 +365,12 @@ where
         None => server.addr.to_string(),
     }; // updates the address
 
-    // println!("forwarded request to {:?}", request);
+    println!("forwarded request to {:?}", request);
 
     let start = Instant::now();
 
     let data = timeout(timeout_duration, send_request(request)).await; // sends request to the address
-                                                                       // println!("{:?}", data);
+    println!("{:?}", data);
 
     let duration = start.elapsed(); // gets response time
 
