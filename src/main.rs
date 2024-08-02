@@ -85,19 +85,19 @@ impl LoadBalancer {
             } else if line.starts_with("servers:") {
                 let servers_str = line.trim_start_matches("servers:").trim();
                 servers = servers_str
-                    .split(',')
+                    .split(",")
                     .map(|server| server.trim().parse::<hyper::Uri>().expect("Invalid URI"))
                     .collect();
             } else if line.starts_with("weights:") {
                 let weights_str = line.trim_start_matches("weights:").trim();
                 weights = weights_str
-                    .split(',')
+                    .split(",")
                     .map(|weight| weight.trim().parse::<u32>().expect("Invalid weight"))
                     .collect();
             } else if line.starts_with("max connections:") {
                 let max_connections_str = line.trim_start_matches("max connections:").trim();
                 max_connections = max_connections_str
-                    .split(',')
+                    .split(",")
                     .map(|max_connection| {
                         max_connection
                             .trim()
@@ -153,7 +153,6 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
     let res = command!()
-        .arg_required_else_help(true)
         .about(
             r#"
  ____        _            
@@ -192,13 +191,13 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
                         .long("report")
                         .action(ArgAction::SetTrue)
                         .help("Prints server status"),
-                )
-                .arg(
-                    Arg::new("save file")
-                        .short('s')
-                        .long("save")
-                        .help("Saves report data to specified file"),
-                ),
+                    )
+                    .arg(
+                        Arg::new("save file")
+                            .short('s')
+                            .long("save")
+                            .help("Saves report data to specified file"),
+                    ),
         )
         .get_matches();
 
