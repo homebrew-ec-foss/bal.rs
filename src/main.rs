@@ -1,4 +1,4 @@
-use clap::{command, Arg, Command};
+use clap::{command, Arg, ArgAction, Command};
 use std::env;
 use std::error::Error;
 use std::fs::File;
@@ -15,6 +15,9 @@ struct LoadBalancer {
     servers: Vec<Server>,
     timeout: Duration,
     health_check_interval: Duration,
+    report: bool,
+    save_file: String,
+    save: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,6 +28,7 @@ struct Server {
     connections: u32,
     max_connections: u32,
     alive: bool,
+    connections_served: u32,
 }
 
 impl Server {
@@ -36,6 +40,7 @@ impl Server {
             response_time: Duration::from_secs(0),
             connections: 0,
             alive: true,
+            connections_served: 0,
         }
     }
 }
@@ -48,6 +53,9 @@ impl LoadBalancer {
             servers: Vec::new(),
             timeout: Duration::from_secs(0),
             health_check_interval: Duration::from_secs(0),
+            report: true,
+            save_file: String::from("data.txt"),
+            save: false,
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&LoadBalancer> {
@@ -77,19 +85,19 @@ impl LoadBalancer {
             } else if line.starts_with("servers:") {
                 let servers_str = line.trim_start_matches("servers:").trim();
                 servers = servers_str
-                    .split(",")
+                    .split(',')
                     .map(|server| server.trim().parse::<hyper::Uri>().expect("Invalid URI"))
                     .collect();
             } else if line.starts_with("weights:") {
                 let weights_str = line.trim_start_matches("weights:").trim();
                 weights = weights_str
-                    .split(",")
+                    .split(',')
                     .map(|weight| weight.trim().parse::<u32>().expect("Invalid weight"))
                     .collect();
             } else if line.starts_with("max connections:") {
                 let max_connections_str = line.trim_start_matches("max connections:").trim();
                 max_connections = max_connections_str
-                    .split(",")
+                    .split(',')
                     .map(|max_connection| {
                         max_connection
                             .trim()
@@ -139,6 +147,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     lb.update("config.yaml")?;
 
     cli(lb)
+    // drop(lb::start_lb(lb));
+    // Ok(())
 }
 
 fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
@@ -166,14 +176,28 @@ L7 Load Balancer Implemented in Rust 🦀
                 )
                 .arg(Arg::new("algorithm").short('a').long("algorithm").help(
                     "Starts load balancer with specified algorithm.
-Available algorithms: round_robin, weighted_round_robin, least_connections, 
-weighted_least_connections, least_response_time, weighted_least_response_time",
+Available algorithms: round_robin/rr, weighted_round_robin/wrr, least_connections/lc, 
+weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response_time/wlrc",
                 ))
                 .arg(
                     Arg::new("path")
+                        .short('p')
                         .long("path")
                         .default_value("config.yaml")
                         .help("Specify path to config file"),
+                )
+                .arg(
+                    Arg::new("report")
+                        .short('r')
+                        .long("report")
+                        .action(ArgAction::SetTrue)
+                        .help("Prints server status"),
+                )
+                .arg(
+                    Arg::new("save file")
+                        .short('s')
+                        .long("save")
+                        .help("Saves report data to specified file"),
                 ),
         )
         .get_matches();
@@ -185,8 +209,11 @@ weighted_least_connections, least_response_time, weighted_least_response_time",
             let path = start_args.get_one::<String>("path");
             let address = start_args.get_one::<String>("address");
             let algorithm = start_args.get_one::<String>("algorithm");
+            let report = start_args.get_one::<bool>("report");
+            let save = start_args.get_one::<String>("save file");
 
             if let Some(path) = path {
+                lb.servers = Vec::new();
                 lb.update(path).unwrap();
             }
 
@@ -196,6 +223,15 @@ weighted_least_connections, least_response_time, weighted_least_response_time",
 
             if let Some(algorithm) = algorithm {
                 lb.algo = get_algo(algorithm);
+            }
+
+            if let Some(report) = report {
+                lb.report = *report;
+            }
+
+            if let Some(save) = save {
+                lb.save_file.clone_from(save);
+                lb.save = true;
             }
 
             drop(lb::start_lb(lb));
@@ -208,12 +244,12 @@ weighted_least_connections, least_response_time, weighted_least_response_time",
 
 fn get_algo(algo: &str) -> Algorithm {
     match algo {
-        "round_robin" => Algorithm::RoundRobin,
-        "weighted_round_robin" => Algorithm::WeightedRoundRobin,
-        "least_connections" => Algorithm::LeastConnections,
-        "weighted_least_connections" => Algorithm::WeightedLeastConnections,
-        "least_response_time" => Algorithm::LeastResponseTime,
-        "weighted_least_response_time" => Algorithm::WeightedLeastResponseTime,
+        // "round_robin" => Algorithm::RoundRobin,
+        "weighted_round_robin" | "wrr" => Algorithm::WeightedRoundRobin,
+        "least_connections" | "lc" => Algorithm::LeastConnections,
+        "weighted_least_connections" | "wlc" => Algorithm::WeightedLeastConnections,
+        "least_response_time" | "lrt" => Algorithm::LeastResponseTime,
+        "weighted_least_response_time" | "wlrt" => Algorithm::WeightedLeastResponseTime,
         _ => Algorithm::RoundRobin, // Default algorithms
     }
 }

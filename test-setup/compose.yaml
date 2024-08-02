@@ -1,0 +1,36 @@
+services:
+
+  flask-app-5000:
+    build: .
+    ports:
+      - "5000:5000"
+    command: python app.py 5000
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /code
+
+  flask-app-5001:
+    build: .
+    ports:
+      - "5001:5001"
+    command: python app.py 5001
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /code
+  flask-app-5002:
+    build: .
+    ports:
+      - "5002:5002"
+    command: python app.py 5002
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /code
+
+  redis:
+    image: "redis:alpine"
