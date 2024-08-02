@@ -1,4 +1,5 @@
 services:
+
   flask-app-5000:
     build: .
     ports:
@@ -20,7 +21,6 @@ services:
         - action: sync
           path: .
           target: /code
-
   flask-app-5002:
     build: .
     ports:
