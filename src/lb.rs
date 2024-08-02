@@ -1,18 +1,17 @@
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex, MutexGuard};  
-use hyper::{body::Bytes, Request, Response,Uri};
+use std::sync::{Arc, Mutex, MutexGuard};    
 
-use futures_util::StreamExt; // For stream utilities
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
+use hyper::{body::Bytes, Request, Uri, Response};
 use hyper_util::rt::TokioIo;
 use std::str::FromStr;
 use std::time::Instant;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{timeout, sleep};
-use hyper::{Method, body::Incoming};
+
 use crate::{Algorithm, Config};
 mod algos;
 use algos::round_robin::RoundRobin;
@@ -33,69 +32,6 @@ fn uri_to_socket_addr(uri: &Uri) -> Result<SocketAddr, &'static str> { // takes 
     let addr_str = format!("{}:{}", host, port); // Combine host and port into a SocketAddr
     SocketAddr::from_str(&addr_str).map_err(|_| "Failed to parse SocketAddr")
 }
-
-async fn handle_message_request(req: &Request<Bytes>) -> Result<Response<Byte>, Infallible> {
-    // Collect the body into a Vec<Bytes>
-    let body_bytes = req.into_body()
-        .fold(Vec::new(), |mut acc, chunk| async move {
-            acc.extend_from_slice(&chunk);
-            acc
-        })
-        .await;
-    
-    let message = String::from_utf8(body_bytes).unwrap_or_default();
-
-    // Process the message and create a response
-    let response_body = format!("Received message: {}", message).into();
-    Ok(Response::new(response_body))
-}
-
-
-async fn handle_request<T>(
-    req: Arc<Option<Request<Incoming>>>,
-    config: Arc<Mutex<Config>>,
-    load_balancer: Arc<Mutex<T>>,
-) -> Result<Response<Full<Bytes>>, Infallible>
-where
-    T: LoadBalancer,
-{
-    let req_clone = req.clone();
-    if let Some(req) = &*req_clone {
-        if req.uri().path() == "/message" && req.method() == Method::POST {
-            return handle_message_request(req.clone()).await;
-        }
-    }
-
-    loop {
-        let len = config.lock().unwrap().servers.len();
-        if len > 0 {
-            match get_request(
-                Arc::clone(&req),
-                Arc::clone(&config),
-                Arc::clone(&load_balancer),
-            )
-            .await
-            {
-                Some(request) => {
-                    return request;
-                }
-                None => {
-                    eprintln!("rerouting request to a new server");
-                }
-            }
-        } else {
-            eprintln!("No servers available");
-            let body = format!("No servers available, please try again");
-            let response = Response::builder()
-                .status(500)
-                .body(Full::new(Bytes::from(body)))
-                .unwrap();
-            return Ok(response);
-        }
-    }
-}
-
-
 
 #[tokio::main]
 pub async fn start_lb(config: Config) -> Result<(), Box<dyn std::error::Error + Send + Sync>> { // starts the load balancer
@@ -278,8 +214,112 @@ where
         });
     }
 }
+#[derive(Debug)]
+struct HttpRequestDetails {
+    method: String,
+    uri: String,
+    version: String,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+/*async fn handle_request<T>(
+    req: Arc<Option<Request<hyper::body::Incoming>>>,
+    config: Arc<Mutex<Config>>,
+    load_balancer: Arc<Mutex<T>>,
+) -> Result<Response<Full<Bytes>>, Infallible>
+where
+    T: LoadBalancer,
+{
+     // Extract and print the incoming request details
+    let request_details = if let Some(req) = req.as_ref() 
+    {
+        let headers = req.headers()
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
+            .collect();
 
+            let var=HttpRequestDetails {
+            method: req.method().to_string(),
+            uri: req.uri().to_string(),
+            version: format!("{:?}", req.version()),
+            headers,
+            body: "Body details here".to_string(), // Placeholder, body extraction can be done if needed
+        };
+        println!("Incoming request details: {:?}", var );
+    } else
+     {
+        let var=HttpRequestDetails 
+        {
+            method: "Unknown".to_string(),
+            uri: "Unknown".to_string(),
+            version: "Unknown".to_string(),
+            headers: vec![],
+            body: "No body".to_string(),
+        };
+        println!("Incoming request details: {:?}", var );
+    };
+  
+    //println!("Incoming request details: {:?}", var );
+    loop {
+        let len = config.lock().unwrap().servers.len();
+        if len > 0 {
+            match get_request(
+                Arc::clone(&req),
+                Arc::clone(&config),
+                Arc::clone(&load_balancer),
+            )
+            .await
+            {
+                Some(request) => {
+                    return request;
+                }
+                None => {
+                    eprintln!("rerouting request to a new server");
+                }
+            }
+        } else {
+            eprintln!("No servers available");
+            let body = format!("No servers available, please try again"); // writes the body of html file
+            let response = Response::builder()
+                .status(500)
+                .body(Full::new(Bytes::from(body)))
+                .unwrap();
+            return Ok(response);
+        }
+    }
+}*/
+fn main() {
+    // Simulate a request
+    let req: Option<hyper::Request<hyper::Body>> = None; // Replace this with an actual request if available
 
+    let request_details = if let Some(req) = req.as_ref() {
+        let headers = req.headers()
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_str().unwrap_or("").to_string()))
+            .collect();
+
+        let details = HttpRequestDetails {
+            method: req.method().to_string(),
+            uri: req.uri().to_string(),
+            version: format!("{:?}", req.version()),
+            headers,
+            body: "Body details here".to_string(), // Placeholder, body extraction can be done if needed
+        };
+        println!("Incoming request details: {:?}", details);
+        details
+    } else {
+        let details = HttpRequestDetails {
+            method: "Unknown".to_string(),
+            uri: "Unknown".to_string(),
+            version: "Unknown".to_string(),
+            headers: HashMap::new(),
+            body: "No body".to_string(),
+        };
+        println!("Incoming request details: {:?}", details);
+        details
+    };
+
+}
 
 
 async fn get_request<T>(
