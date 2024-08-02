@@ -1,7 +1,7 @@
 use std::convert::Infallible;
+use std::io::Write;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
-use std::io::Write;
 
 use http_body_util::{BodyExt, Empty, Full};
 use hyper::server::conn::http1;
@@ -49,7 +49,7 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
             lb_lock.timeout,
             lb_lock.report,
             lb_lock.save,
-            lb_lock.save_file.clone()
+            lb_lock.save_file.clone(),
         )
     };
     let lb_clone = Arc::clone(&lb); //creates a clone for health checker
@@ -139,9 +139,14 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                     let response_time = format!("{:?}", server.response_time);
                     report += &format!(
                         "| {:<20} | {:<7} | {:<13} | {:<11} | {:<24} | {}\n",
-                        server.addr, status, response_time, server.connections, server.connections_served, bar
+                        server.addr,
+                        status,
+                        response_time,
+                        server.connections,
+                        server.connections_served,
+                        bar
                     );
-                    
+
                     total_connections += server.connections;
                     total_connections_served += server.connections_served;
                     if server.alive {
@@ -149,7 +154,7 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                         total_response_time += server.response_time;
                     }
                 }
-            
+
                 report += "+------------------------+---------+---------------+-------------+--------------------------+\n";
 
                 let avg_response_time = if alive_servers > 0 {
@@ -162,7 +167,10 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                 report += "|           LB Summary             |\n";
                 report += "+----------------------------------+\n";
                 report += &format!("| Total Connections    : {:<10}|\n", total_connections);
-                report += &format!("| Connections Served   : {:<10}|\n", total_connections_served);
+                report += &format!(
+                    "| Connections Served   : {:<10}|\n",
+                    total_connections_served
+                );
                 report += &format!("| Avg Response Time    : {:<10?}|\n", avg_response_time);
                 report += &format!("| Alive Servers        : {:<10}|\n", alive_servers);
                 report += "+----------------------------------+\n";
@@ -176,9 +184,12 @@ pub async fn start_lb(lb: LoadBalancer) -> Result<(), Box<dyn std::error::Error 
                     let mut file = std::fs::OpenOptions::new()
                         .append(true)
                         .create(true)
-                        .open(&save_file).unwrap();
+                        .open(&save_file)
+                        .unwrap();
 
-                    let t = chrono::prelude::Local::now().format("%d/%m/%y %H:%M:%S").to_string();
+                    let t = chrono::prelude::Local::now()
+                        .format("%d/%m/%y %H:%M:%S")
+                        .to_string();
                     drop(writeln!(file, "Log: {:?}", t));
                     drop(writeln!(file, "{}", report));
                 }
@@ -360,7 +371,7 @@ where
         Some(req) => format!(
             "{}{}",
             server.addr.clone(),
-            req.uri().to_string().trim_start_matches("/")
+            req.uri().to_string().trim_start_matches('/')
         ),
         None => server.addr.to_string(),
     }; // updates the address

@@ -17,7 +17,7 @@ struct LoadBalancer {
     health_check_interval: Duration,
     report: bool,
     save_file: String,
-    save: bool
+    save: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,7 +55,7 @@ impl LoadBalancer {
             health_check_interval: Duration::from_secs(0),
             report: true,
             save_file: String::from("data.txt"),
-            save: false
+            save: false,
         }
     }
     fn update(&mut self, path: &str) -> io::Result<&LoadBalancer> {
@@ -85,19 +85,19 @@ impl LoadBalancer {
             } else if line.starts_with("servers:") {
                 let servers_str = line.trim_start_matches("servers:").trim();
                 servers = servers_str
-                    .split(",")
+                    .split(',')
                     .map(|server| server.trim().parse::<hyper::Uri>().expect("Invalid URI"))
                     .collect();
             } else if line.starts_with("weights:") {
                 let weights_str = line.trim_start_matches("weights:").trim();
                 weights = weights_str
-                    .split(",")
+                    .split(',')
                     .map(|weight| weight.trim().parse::<u32>().expect("Invalid weight"))
                     .collect();
             } else if line.starts_with("max connections:") {
                 let max_connections_str = line.trim_start_matches("max connections:").trim();
                 max_connections = max_connections_str
-                    .split(",")
+                    .split(',')
                     .map(|max_connection| {
                         max_connection
                             .trim()
@@ -198,7 +198,7 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
                         .short('s')
                         .long("save")
                         .help("Saves report data to specified file"),
-                )
+                ),
         )
         .get_matches();
 
@@ -230,7 +230,7 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
             }
 
             if let Some(save) = save {
-                lb.save_file = save.clone();
+                lb.save_file.clone_from(save);
                 lb.save = true;
             }
 
