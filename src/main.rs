@@ -156,12 +156,14 @@ fn cli(mut lb: LoadBalancer) -> Result<(), Box<dyn Error>> {
         .arg_required_else_help(true)
         .about(
             r#"
- ____        _            
-|  _ \      | |           
-| |_) | __ _| |  _ __ ___ 
-|  _ < / _` | | | '__/ __|
-| |_) | (_| | |_| |  \__ \
-|____/ \__,_|_(_)_|  |___/
+ ________  ________  ___           ________  ________          
+|\   __  \|\   __  \|\  \         |\   __  \|\   ____\         
+\ \  \|\ /\ \  \|\  \ \  \        \ \  \|\  \ \  \___|_        
+ \ \   __  \ \   __  \ \  \        \ \   _  _\ \_____  \       
+  \ \  \|\  \ \  \ \  \ \  \____  __\ \  \\  \\|____|\  \      
+   \ \_______\ \__\ \__\ \_______\\__\ \__\\ _\ ____\_\  \     
+    \|_______|\|__|\|__|\|_______\|__|\|__|\|__|\_________\    
+                                               \|_________|   
 L7 Load Balancer Implemented in Rust 🦀
     "#,
         )
@@ -198,6 +200,13 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
                         .short('s')
                         .long("save")
                         .help("Saves report data to specified file"),
+                )
+                .arg(
+                    Arg::new("save config")
+                        .short('w')
+                        .long("write")
+                        .action(ArgAction::SetTrue)
+                        .help("Writes CLI config changes to config.yaml"),
                 ),
         )
         .get_matches();
@@ -211,6 +220,7 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
             let algorithm = start_args.get_one::<String>("algorithm");
             let report = start_args.get_one::<bool>("report");
             let save = start_args.get_one::<String>("save file");
+            let write = start_args.get_one::<bool>("save config");
 
             if let Some(path) = path {
                 lb.servers = Vec::new();
@@ -234,6 +244,10 @@ weighted_least_connections/wlc, least_response_time/lrt, weighted_least_response
                 lb.save = true;
             }
 
+            if let Some(write) = write {
+                //lb.write = *write;
+            }
+
             drop(lb::start_lb(lb));
         }
         _ => println!("Invalid command"),
@@ -252,4 +266,19 @@ fn get_algo(algo: &str) -> Algorithm {
         "weighted_least_response_time" | "wlrt" => Algorithm::WeightedLeastResponseTime,
         _ => Algorithm::RoundRobin, // Default algorithms
     }
+}
+
+fn write_to_config(address: String, algorithm: String, path: String) {
+    let yaml = serde_yaml::to_string(&LoadBalancer {
+        load_balancer: address.parse::<hyper::Uri>().unwrap(),
+        algo: get_algo(&algorithm),
+        servers: Vec::new(),
+        timeout: Duration::from_secs(0),
+        health_check_interval: Duration::from_secs(0),
+        report: true,
+        save_file: String::from("data.txt"),
+        save: false,
+    })
+    .unwrap();
+    fs::write(path, yaml).unwrap();
 }
